@@ -55,7 +55,7 @@ export default function App() {
       // Products
       const { data: dbProducts, error: pErr } = await supabase.from('products').select('*').order('created_at', { ascending: true });
       if (dbProducts && dbProducts.length > 0) {
-        setProductsList(dbProducts.map(d => ({
+        setProductsList(dbProducts.filter(d => Number(d.stock) >= 0).map(d => ({
           id: d.id, name: d.name, description: d.description, price: Number(d.price), 
           category: d.category, image: d.image, inStock: d.in_stock, stock: Number(d.stock)
         })));

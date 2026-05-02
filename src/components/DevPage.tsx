@@ -76,15 +76,17 @@ export const DevPage: React.FC<DevPageProps> = ({ products, setProducts, qrCodeU
   };
 
   const handleRemoveProduct = async (id: string) => {
-    setLocalProducts(prev => prev.filter(p => p.id !== id));
+    const updated = localProducts.filter(p => p.id !== id);
+    setLocalProducts(updated);
+    setProducts(updated);
     setEditingItemId(null);
     if (supabase) {
       // First try to delete
       const { error } = await supabase.from('products').delete().eq('id', id);
       if (error) {
-        // If it fails (likely due to foreign key order constraints), we just hide it by putting stock 0 or instock false
-        console.error("Could not delete, maybe orders exist. Setting out of stock instead.");
-        await supabase.from('products').update({ in_stock: false, stock: 0 }).eq('id', id);
+        // If it fails (likely due to foreign key order constraints), we just hide it by putting stock -1
+        console.warn("Could not delete, maybe orders exist. Marking as deleted with stock -1.");
+        await supabase.from('products').update({ in_stock: false, stock: -1 }).eq('id', id);
       }
     }
   };
