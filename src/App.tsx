@@ -5,6 +5,7 @@ import { Cart } from './components/Cart';
 import { DevPage } from './components/DevPage';
 import { CheckoutModal } from './components/Checkout';
 import { CustomerCare, TermsOfService, PrivacyPolicy } from './components/InfoPages';
+import { OrderTracker } from './components/OrderTracker';
 import { Search, ShoppingBag, Package } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { supabase } from './lib/supabase';
@@ -27,6 +28,7 @@ export default function App() {
   // New States
   const [isSearchExpanded, setIsSearchExpanded] = useState(false);
   const [activePage, setActivePage] = useState<'home' | 'care' | 'terms' | 'privacy'>('home');
+  const [activeSessionOrderId, setActiveSessionOrderId] = useState<string | null>(() => sessionStorage.getItem('snackbox_order_id'));
 
   const [cartItems, setCartItems] = useState<CartItem[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
@@ -70,6 +72,20 @@ export default function App() {
     };
 
     loadData();
+
+    // Listen to real-time changes
+    if (supabase) {
+      const channel = supabase
+        .channel('public:orders')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, payload => {
+          fetchOrders();
+        })
+        .subscribe();
+      
+      return () => {
+        supabase.removeChannel(channel);
+      };
+    }
   }, []);
 
   const fetchOrders = async () => {
@@ -173,6 +189,10 @@ export default function App() {
     
     setCartItems([]);
     setIsCheckoutOpen(false);
+    
+    // Set for session tracking
+    sessionStorage.setItem('snackbox_order_id', newOrder.id);
+    setActiveSessionOrderId(newOrder.id);
 
     // Sync to Supabase
     if (supabase) {
@@ -216,6 +236,10 @@ export default function App() {
 
   const cartTotalItems = cartItems.reduce((acc, item) => acc + item.quantity, 0);
   const cartTotalPrice = cartItems.reduce((acc, item) => acc + (item.price * item.quantity), 0);
+
+  const activeOrderDetails = useMemo(() => {
+    return orders.find(o => o.id === activeSessionOrderId) || null;
+  }, [orders, activeSessionOrderId]);
 
   return (
     <>
@@ -385,6 +409,14 @@ export default function App() {
           />
         )}
       </AnimatePresence>
+
+      <OrderTracker 
+        order={activeOrderDetails} 
+        onClear={() => {
+          sessionStorage.removeItem('snackbox_order_id');
+          setActiveSessionOrderId(null);
+        }} 
+      />
     </>
   );
 }

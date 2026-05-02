@@ -94,6 +94,8 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose, t
                       type="text" 
                       value={name}
                       onChange={(e) => setName(e.target.value)}
+                      pattern="^[A-Za-z\s]+$"
+                      title="Name can only contain alphabets and spaces"
                       className="glass-input w-full p-4 rounded-2xl" 
                       placeholder="John Doe"
                     />
@@ -105,8 +107,10 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose, t
                       type="tel" 
                       value={phone}
                       onChange={(e) => setPhone(e.target.value)}
+                      pattern="[0-9]{10,}"
+                      title="Phone number must be at least 10 digits long and contain only numbers"
                       className="glass-input w-full p-4 rounded-2xl" 
-                      placeholder="+1 (555) 000-0000"
+                      placeholder="9876543210"
                     />
                   </div>
                   <div>
@@ -116,6 +120,8 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose, t
                       type="text" 
                       value={room}
                       onChange={(e) => setRoom(e.target.value)}
+                      pattern="^[A-Za-z0-9\s\-]+$"
+                      title="Room number can only contain alphanumeric characters, spaces and hyphens"
                       className="glass-input w-full p-4 rounded-2xl" 
                       placeholder="A-402"
                     />
