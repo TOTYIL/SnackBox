@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Product, Order } from '../data';
 import { Save, Plus, ArrowLeft, PackageSearch, CreditCard, ClipboardList, Edit2, Trash2, Check, X, RotateCcw } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { supabase } from '../lib/supabase';
 
 interface DevPageProps {
   products: Product[];
@@ -71,13 +72,42 @@ export const DevPage: React.FC<DevPageProps> = ({ products, setProducts, qrCodeU
     setEditingItemId(newId);
   };
 
-  const handleSaveInventory = () => {
-    setProducts(localProducts);
+  const handleRemoveProduct = async (id: string) => {
+    setLocalProducts(prev => prev.filter(p => p.id !== id));
     setEditingItemId(null);
+    if (supabase) {
+      // First try to delete
+      const { error } = await supabase.from('products').delete().eq('id', id);
+      if (error) {
+        // If it fails (likely due to foreign key order constraints), we just hide it by putting stock 0 or instock false
+        console.error("Could not delete, maybe orders exist. Setting out of stock instead.");
+        await supabase.from('products').update({ in_stock: false, stock: 0 }).eq('id', id);
+      }
+    }
   };
 
-  const handleSavePayment = () => {
+  const handleSaveInventory = async () => {
+    setProducts(localProducts);
+    setEditingItemId(null);
+    if (!supabase) return;
+    
+    const { error } = await supabase.from('products').upsert(localProducts.map(p => ({
+      id: p.id,
+      name: p.name,
+      description: p.description,
+      price: p.price,
+      category: p.category,
+      image: p.image,
+      in_stock: p.inStock,
+      stock: p.stock
+    })));
+  };
+
+  const handleSavePayment = async () => {
     setQrCodeUrl(localQr);
+    if (!supabase) return;
+    
+    const { error } = await supabase.from('payment_config').update({ qr_code_url: localQr }).eq('id', 'config');
   };
 
   return (
@@ -281,10 +311,7 @@ export const DevPage: React.FC<DevPageProps> = ({ products, setProducts, qrCodeU
                         <div className="flex justify-between items-center mb-2 pb-2 border-b border-white/10">
                            <span className="font-semibold text-indigo-300 text-sm">Editing Item</span>
                            <div className="flex gap-2">
-                               <button onClick={() => {
-                                   setLocalProducts(prev => prev.filter(p => p.id !== product.id));
-                                   setEditingItemId(null);
-                               }} className="text-red-400 hover:bg-red-500/20 text-sm bg-red-500/10 px-3 py-1 rounded-lg flex items-center gap-1 transition">
+                               <button onClick={() => handleRemoveProduct(product.id)} className="text-red-400 hover:bg-red-500/20 text-sm bg-red-500/10 px-3 py-1 rounded-lg flex items-center gap-1 transition">
                                    <Trash2 size={14}/> Remove
                                </button>
                                <button onClick={() => setEditingItemId(null)} className="text-white/50 hover:text-white text-sm bg-white/5 px-3 py-1 rounded-lg">Done</button>

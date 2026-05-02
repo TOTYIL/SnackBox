@@ -7,6 +7,7 @@ import { CheckoutModal } from './components/Checkout';
 import { CustomerCare, TermsOfService, PrivacyPolicy } from './components/InfoPages';
 import { Search, ShoppingBag, Package } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
+import { supabase } from './lib/supabase';
 
 interface CartItem extends Product {
   quantity: number;
@@ -17,8 +18,8 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState('');
   
   // App Global State
-  const [productsList, setProductsList] = useState<Product[]>(initialProducts);
-  const [qrCodeUrl, setQrCodeUrl] = useState('https://images.unsplash.com/photo-1614680376593-902f74a5cecb?auto=format&fit=crop&w=400&q=80'); // Dummy QR
+  const [productsList, setProductsList] = useState<Product[]>([]);
+  const [qrCodeUrl, setQrCodeUrl] = useState('https://images.unsplash.com/photo-1614680376593-902f74a5cecb?auto=format&fit=crop&w=400&q=80');
   const [isDevMode, setIsDevMode] = useState(false);
   const [isCartOpen, setIsCartOpen] = useState(false);
   const [isCheckoutOpen, setIsCheckoutOpen] = useState(false);
@@ -29,6 +30,73 @@ export default function App() {
 
   const [cartItems, setCartItems] = useState<CartItem[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
+
+  // Fetch Data on mount
+  useEffect(() => {
+    if (!supabase) {
+      console.warn('Supabase client not found. Falling back to local data.');
+      setProductsList(initialProducts);
+      return;
+    }
+
+    const loadData = async () => {
+      // Products
+      const { data: dbProducts, error: pErr } = await supabase.from('products').select('*').order('created_at', { ascending: true });
+      if (dbProducts && dbProducts.length > 0) {
+        setProductsList(dbProducts.map(d => ({
+          id: d.id, name: d.name, description: d.description, price: Number(d.price), 
+          category: d.category, image: d.image, inStock: d.in_stock, stock: Number(d.stock)
+        })));
+      } else {
+        // Init data
+        setProductsList(initialProducts);
+        const { error: insertErr } = await supabase.from('products').insert(initialProducts.map(p => ({
+          id: p.id, name: p.name, description: p.description, price: p.price, 
+          category: p.category, image: p.image, in_stock: p.inStock, stock: p.stock
+        })));
+        if(insertErr) console.error('Error inserting initial products', insertErr);
+      }
+
+      // Payments Config
+      const { data: qData } = await supabase.from('payment_config').select('qr_code_url').eq('id', 'config').single();
+      if (qData) {
+        setQrCodeUrl(qData.qr_code_url);
+      } else {
+        await supabase.from('payment_config').insert({ id: 'config', qr_code_url: qrCodeUrl });
+      }
+
+      // Orders
+      fetchOrders();
+    };
+
+    loadData();
+  }, []);
+
+  const fetchOrders = async () => {
+    if (!supabase) return;
+    const { data: dbOrders } = await supabase.from('orders').select(`
+      *,
+      order_items (*)
+    `).order('date', { ascending: false });
+    
+    if (dbOrders) {
+      setOrders(dbOrders.map(o => ({
+        id: o.id,
+        customerName: o.customer_name,
+        phone: o.phone,
+        room: o.room,
+        date: o.date,
+        total: Number(o.total),
+        status: o.status as Order['status'],
+        items: o.order_items.map((oi: any) => ({
+          id: oi.product_id,
+          name: oi.name,
+          price: Number(oi.price),
+          quantity: oi.quantity
+        }))
+      })));
+    }
+  };
 
   // Intercept special search query
   useEffect(() => {
@@ -72,7 +140,7 @@ export default function App() {
     setIsCheckoutOpen(true);
   };
 
-  const finishCheckout = (customerData: {name: string, phone: string, room: string, id: string}) => {
+  const finishCheckout = async (customerData: {name: string, phone: string, room: string, id: string}) => {
     const newOrder: Order = {
       id: customerData.id,
       customerName: customerData.name,
@@ -89,9 +157,10 @@ export default function App() {
       status: 'pending'
     };
     
+    // Update local state first to feel fast
     setOrders(prev => [newOrder, ...prev]);
     
-    // Deduct stock from productsList
+    // Deduct stock from productsList local state
     setProductsList(prevProducts => 
       prevProducts.map(p => {
         const cartItem = cartItems.find(item => item.id === p.id);
@@ -101,13 +170,48 @@ export default function App() {
         return p;
       })
     );
-
+    
     setCartItems([]);
     setIsCheckoutOpen(false);
+
+    // Sync to Supabase
+    if (supabase) {
+      await supabase.from('orders').insert({
+        id: newOrder.id,
+        customer_name: newOrder.customerName,
+        phone: newOrder.phone,
+        room: newOrder.room,
+        total: newOrder.total,
+        status: newOrder.status,
+        date: newOrder.date
+      });
+
+      await supabase.from('order_items').insert(newOrder.items.map(item => ({
+        order_id: newOrder.id,
+        product_id: item.id,
+        name: item.name,
+        price: item.price,
+        quantity: item.quantity
+      })));
+
+      // Deduct stock in DB
+      for (const item of newOrder.items) {
+        // Find current stock
+        const p = productsList.find(pr => pr.id === item.id);
+        if (p) {
+          await supabase.from('products').update({ stock: Math.max(0, p.stock - item.quantity) }).eq('id', item.id);
+        }
+      }
+    }
   };
 
-  const updateOrderStatus = (orderId: string, status: Order['status']) => {
+  const updateOrderStatus = async (orderId: string, status: Order['status']) => {
     setOrders(prev => prev.map(o => o.id === orderId ? { ...o, status } : o));
+    
+    // Sync to Supabase
+    if (supabase) {
+      await supabase.from('orders').update({ status }).eq('id', orderId);
+    }
   };
 
   const cartTotalItems = cartItems.reduce((acc, item) => acc + item.quantity, 0);
