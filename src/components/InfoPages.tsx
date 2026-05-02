@@ -50,13 +50,13 @@ export const CustomerCare: React.FC<InfoPageProps> = ({ onClose }) => {
             </div>
           </a>
           
-          <a href="tel:7830097353" className="flex-1 glass-panel hover:bg-white/10 transition-colors p-6 rounded-3xl flex flex-col items-center gap-4 border border-white/20 text-white text-center">
+          <a href="tel:8534876063" className="flex-1 glass-panel hover:bg-white/10 transition-colors p-6 rounded-3xl flex flex-col items-center gap-4 border border-white/20 text-white text-center">
             <div className="w-16 h-16 rounded-full bg-indigo-500/20 text-indigo-400 flex items-center justify-center">
               <Phone size={32} />
             </div>
             <div>
               <h3 className="font-semibold text-lg">Call us</h3>
-              <p className="text-white/60 text-sm mt-1">7830097353</p>
+              <p className="text-white/60 text-sm mt-1">8534876063</p>
             </div>
           </a>
         </div>

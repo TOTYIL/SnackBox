@@ -28,7 +28,16 @@ export default function App() {
   // New States
   const [isSearchExpanded, setIsSearchExpanded] = useState(false);
   const [activePage, setActivePage] = useState<'home' | 'care' | 'terms' | 'privacy'>('home');
-  const [activeSessionOrderId, setActiveSessionOrderId] = useState<string | null>(() => sessionStorage.getItem('snackbox_order_id'));
+  const [sessionOrderIds, setSessionOrderIds] = useState<string[]>(() => {
+    try {
+      const saved = sessionStorage.getItem('snackbox_orders');
+      if (saved) return JSON.parse(saved);
+    } catch(e) {}
+    const old = sessionStorage.getItem('snackbox_order_id');
+    if (old) return [old];
+    return [];
+  });
+  const [isTrackerOpen, setIsTrackerOpen] = useState(false);
 
   const [cartItems, setCartItems] = useState<CartItem[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
@@ -73,19 +82,26 @@ export default function App() {
 
     loadData();
 
+    // Fallback polling for robust updates
+    const interval = setInterval(() => {
+      fetchOrders();
+    }, 5000);
+
     // Listen to real-time changes
+    let channel: any = null;
     if (supabase) {
-      const channel = supabase
+      channel = supabase
         .channel('public:orders')
         .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, payload => {
           fetchOrders();
         })
         .subscribe();
-      
-      return () => {
-        supabase.removeChannel(channel);
-      };
     }
+
+    return () => {
+      clearInterval(interval);
+      if (channel) supabase.removeChannel(channel);
+    };
   }, []);
 
   const fetchOrders = async () => {
@@ -191,8 +207,10 @@ export default function App() {
     setIsCheckoutOpen(false);
     
     // Set for session tracking
-    sessionStorage.setItem('snackbox_order_id', newOrder.id);
-    setActiveSessionOrderId(newOrder.id);
+    const newSessionIds = [newOrder.id, ...sessionOrderIds.filter(id => id !== newOrder.id)];
+    sessionStorage.setItem('snackbox_orders', JSON.stringify(newSessionIds));
+    setSessionOrderIds(newSessionIds);
+    setIsTrackerOpen(true);
 
     // Sync to Supabase
     if (supabase) {
@@ -237,9 +255,17 @@ export default function App() {
   const cartTotalItems = cartItems.reduce((acc, item) => acc + item.quantity, 0);
   const cartTotalPrice = cartItems.reduce((acc, item) => acc + (item.price * item.quantity), 0);
 
-  const activeOrderDetails = useMemo(() => {
-    return orders.find(o => o.id === activeSessionOrderId) || null;
-  }, [orders, activeSessionOrderId]);
+  const trackedOrders = useMemo(() => {
+    return orders.filter(o => {
+      if (!sessionOrderIds.includes(o.id)) return false;
+      if (o.status === 'rejected') return false; 
+      if (o.status === 'completed') {
+          const orderTime = new Date(o.date).getTime();
+          if (Date.now() - orderTime > 30 * 60 * 1000) return false;
+      }
+      return true;
+    });
+  }, [orders, sessionOrderIds]);
 
   return (
     <>
@@ -250,10 +276,13 @@ export default function App() {
         <nav className="fixed top-0 left-0 w-full z-40 px-3 sm:px-6 lg:px-8 py-3 sm:py-4">
           <div className="w-full max-w-[1800px] mx-auto glass-panel border border-white/20 rounded-full px-4 sm:px-6 py-2.5 sm:py-3 flex items-center justify-between gap-2 sm:gap-4 relative">
             {/* Logo shifted left */}
-            <div className="flex items-center gap-2 font-bold text-lg sm:text-2xl tracking-tight shrink-0">
+            <button 
+              onClick={() => setIsTrackerOpen(true)}
+              className="flex items-center gap-2 font-bold text-lg sm:text-2xl tracking-tight shrink-0 hover:opacity-80 transition cursor-pointer"
+            >
               <Package className="text-pink-400 w-6 h-6 sm:w-8 sm:h-8" />
               <span className={`${isSearchExpanded ? 'hidden sm:block' : 'block'}`}>SnackBox</span>
-            </div>
+            </button>
             
             <div className="flex items-center gap-2 flex-1 justify-end">
               {/* Search within Navigation Ribbon */}
@@ -411,10 +440,13 @@ export default function App() {
       </AnimatePresence>
 
       <OrderTracker 
-        order={activeOrderDetails} 
-        onClear={() => {
-          sessionStorage.removeItem('snackbox_order_id');
-          setActiveSessionOrderId(null);
+        orders={trackedOrders} 
+        isOpen={isTrackerOpen}
+        onClose={() => setIsTrackerOpen(false)}
+        onClearOrder={(id) => {
+          const newIds = sessionOrderIds.filter(sid => sid !== id);
+          sessionStorage.setItem('snackbox_orders', JSON.stringify(newIds));
+          setSessionOrderIds(newIds);
         }} 
       />
     </>
