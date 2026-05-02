@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Product, Order } from '../data';
-import { Save, Plus, ArrowLeft, PackageSearch, CreditCard, ClipboardList, Edit2, Trash2, Check, X, RotateCcw } from 'lucide-react';
+import { Save, Plus, ArrowLeft, PackageSearch, CreditCard, ClipboardList, Edit2, Trash2, Check, X, RotateCcw, Power } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { supabase } from '../lib/supabase';
 
@@ -9,15 +9,18 @@ interface DevPageProps {
   setProducts: (products: Product[]) => void;
   qrCodeUrl: string;
   setQrCodeUrl: (url: string) => void;
+  siteStatus: 'live' | 'offline';
+  setSiteStatus: (s: 'live' | 'offline') => void;
   orders: Order[];
   updateOrderStatus: (id: string, status: Order['status']) => void;
   onClose: () => void;
 }
 
-export const DevPage: React.FC<DevPageProps> = ({ products, setProducts, qrCodeUrl, setQrCodeUrl, orders, updateOrderStatus, onClose }) => {
+export const DevPage: React.FC<DevPageProps> = ({ products, setProducts, qrCodeUrl, setQrCodeUrl, siteStatus, setSiteStatus, orders, updateOrderStatus, onClose }) => {
   const [localProducts, setLocalProducts] = useState([...products]);
   const [localQr, setLocalQr] = useState(qrCodeUrl);
   const [activeTab, setActiveTab] = useState<'orders' | 'inventory' | 'payment'>('orders');
+
   
   // Real-time ticker for 1-hour expiration logic
   const [now, setNow] = useState(Date.now());
@@ -354,6 +357,24 @@ export const DevPage: React.FC<DevPageProps> = ({ products, setProducts, qrCodeU
           {/* PAYMENT TAB */}
           {activeTab === 'payment' && (
             <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="glass-panel p-6 sm:p-8 rounded-[2rem] max-w-2xl border border-white/20">
+              <h2 className="text-2xl font-semibold mb-6">Site Configuration</h2>
+              
+              <div className="mb-10 p-5 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-between">
+                <div>
+                  <h3 className="text-lg font-semibold flex items-center gap-2 mb-1">
+                    <Power size={20} className={siteStatus === 'live' ? 'text-green-400' : 'text-red-400'} />
+                    Site Status: {siteStatus === 'live' ? 'Live' : 'Offline'}
+                  </h3>
+                  <p className="text-sm text-white/50">When offline, customers see a sleeping owl and cannot place orders.</p>
+                </div>
+                <button
+                  onClick={() => setSiteStatus(siteStatus === 'live' ? 'offline' : 'live')}
+                  className={`px-6 py-2.5 rounded-xl font-bold transition-all shadow-lg ${siteStatus === 'live' ? 'bg-red-500 hover:bg-red-400 text-white' : 'bg-green-500 hover:bg-green-400 text-black'}`}
+                >
+                  {siteStatus === 'live' ? 'Go Offline' : 'Go Live'}
+                </button>
+              </div>
+
               <h2 className="text-2xl font-semibold mb-6">Payment Configuration</h2>
               <div className="mb-6">
                 <label className="block text-sm text-white/70 mb-2 ml-2">UPI QR Code Image URL</label>

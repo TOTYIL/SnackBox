@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { X, CheckCircle, Smartphone, CreditCard, ArrowRight } from 'lucide-react';
+import { X, CheckCircle, ArrowRight, Banknote, QrCode } from 'lucide-react';
 
 interface CheckoutModalProps {
   isOpen: boolean;
@@ -11,7 +11,7 @@ interface CheckoutModalProps {
 }
 
 export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose, total, qrCodeUrl, onComplete }) => {
-  const [step, setStep] = useState<'details' | 'payment' | 'success'>('details');
+  const [step, setStep] = useState<'details' | 'method' | 'payment_online' | 'success'>('details');
   const [paymentCode, setPaymentCode] = useState('');
   
   // Form State
@@ -35,10 +35,10 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose, t
     }
   }, [isOpen]);
 
-  const handleProceedToPayment = (e: React.FormEvent) => {
+  const handleProceedToMethod = (e: React.FormEvent) => {
     e.preventDefault();
     if (name && phone && room) {
-      setStep('payment');
+      setStep('method');
     }
   };
 
@@ -86,7 +86,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose, t
                 <h2 className="text-2xl font-bold mb-2">Delivery Details</h2>
                 <p className="text-white/60 mb-6 text-sm">Where should we drop off your snacks?</p>
                 
-                <form onSubmit={handleProceedToPayment} className="space-y-4">
+                <form onSubmit={handleProceedToMethod} className="space-y-4">
                   <div>
                     <label className="block text-sm text-white/70 mb-1 ml-1">Name</label>
                     <input 
@@ -94,8 +94,8 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose, t
                       type="text" 
                       value={name}
                       onChange={(e) => setName(e.target.value)}
-                      pattern="^[A-Za-z\s]+$"
-                      title="Name can only contain alphabets and spaces"
+                      pattern="^[A-Za-z\s]{3,}$"
+                      title="Name must be at least 3 alphabets long"
                       className="glass-input w-full p-4 rounded-2xl" 
                       placeholder="John Doe"
                     />
@@ -107,8 +107,9 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose, t
                       type="tel" 
                       value={phone}
                       onChange={(e) => setPhone(e.target.value)}
-                      pattern="[0-9]{10,}"
-                      title="Phone number must be at least 10 digits long and contain only numbers"
+                      pattern="^[0-9]{10}$"
+                      maxLength={10}
+                      title="Phone number must be exactly 10 digits"
                       className="glass-input w-full p-4 rounded-2xl" 
                       placeholder="9876543210"
                     />
@@ -136,20 +137,62 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose, t
                     type="submit"
                     className="w-full bg-white text-black font-semibold rounded-full p-4 flex items-center justify-center gap-2 hover:bg-gray-200 transition"
                   >
-                    Proceed to Pay <ArrowRight size={18} />
+                    Proceed to Payment <ArrowRight size={18} />
                   </button>
                 </form>
               </motion.div>
             )}
 
-            {step === 'payment' && (
+            {step === 'method' && (
               <motion.div
-                key="payment"
+                key="method"
+                initial={{ opacity: 0, x: -20 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: 20 }}
+              >
+                <button onClick={() => setStep('details')} className="text-white/50 text-sm hover:text-white mb-4 block">← Back to Details</button>
+                <h2 className="text-2xl font-bold mb-2">Payment Option</h2>
+                <p className="text-white/60 mb-6 text-sm">How would you like to pay?</p>
+                
+                <div className="space-y-4">
+                  <button 
+                    onClick={() => setStep('payment_online')}
+                    className="w-full bg-white/10 hover:bg-white/20 border border-white/10 rounded-2xl p-6 flex flex-col items-center justify-center gap-3 transition-colors group"
+                  >
+                    <div className="w-12 h-12 rounded-full bg-indigo-500/20 text-indigo-400 flex items-center justify-center group-hover:scale-110 transition-transform">
+                      <QrCode size={24} />
+                    </div>
+                    <div>
+                      <h3 className="font-bold text-lg mb-1">Pay Now</h3>
+                      <p className="text-sm text-white/50">Pay via UPI instantly</p>
+                    </div>
+                  </button>
+
+                  <button 
+                    onClick={handleFinish}
+                    className="w-full bg-white/10 hover:bg-white/20 border border-white/10 rounded-2xl p-6 flex flex-col items-center justify-center gap-3 transition-colors group"
+                  >
+                    <div className="w-12 h-12 rounded-full bg-green-500/20 text-green-400 flex items-center justify-center group-hover:scale-110 transition-transform">
+                      <Banknote size={24} />
+                    </div>
+                    <div>
+                      <h3 className="font-bold text-lg mb-1">Cash on Delivery</h3>
+                      <p className="text-sm text-white/50">Pay when your snacks arrive</p>
+                    </div>
+                  </button>
+                </div>
+              </motion.div>
+            )}
+
+            {step === 'payment_online' && (
+              <motion.div
+                key="payment_online"
                 initial={{ opacity: 0, x: -20 }}
                 animate={{ opacity: 1, x: 0 }}
                 exit={{ opacity: 0, x: 20 }}
                 className="text-center"
               >
+                <button onClick={() => setStep('method')} className="text-white/50 text-sm hover:text-white mb-2 ml-auto">← Back</button>
                 <h2 className="text-2xl font-bold mb-2">Complete Payment</h2>
                 <p className="text-white/60 mb-6 text-sm px-4">
                   Scan the QR code below with any UPI app to pay <b>₹{total.toFixed(2)}</b>.

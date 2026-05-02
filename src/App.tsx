@@ -6,7 +6,7 @@ import { DevPage } from './components/DevPage';
 import { CheckoutModal } from './components/Checkout';
 import { CustomerCare, TermsOfService, PrivacyPolicy } from './components/InfoPages';
 import { OrderTracker } from './components/OrderTracker';
-import { Search, ShoppingBag, Package } from 'lucide-react';
+import { Search, ShoppingBag, Package, X } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { supabase } from './lib/supabase';
 
@@ -38,6 +38,7 @@ export default function App() {
     return [];
   });
   const [isTrackerOpen, setIsTrackerOpen] = useState(false);
+  const [siteStatus, setSiteStatus] = useState<'live'|'offline'>('live');
 
   const [cartItems, setCartItems] = useState<CartItem[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
@@ -74,6 +75,14 @@ export default function App() {
         setQrCodeUrl(qData.qr_code_url);
       } else {
         await supabase.from('payment_config').insert({ id: 'config', qr_code_url: qrCodeUrl });
+      }
+
+      // Site Status Config
+      const { data: statusData } = await supabase.from('payment_config').select('qr_code_url').eq('id', 'site_status').single();
+      if (statusData) {
+        setSiteStatus(statusData.qr_code_url === 'offline' ? 'offline' : 'live');
+      } else {
+        await supabase.from('payment_config').insert({ id: 'site_status', qr_code_url: 'live' });
       }
 
       // Orders
@@ -139,10 +148,18 @@ export default function App() {
   }, [searchQuery]);
 
   const filteredProducts = useMemo(() => {
-    return productsList.filter(p => {
-      const matchesCat = activeCategory === 'All' || p.category === activeCategory;
-      const matchesSearch = p.name.toLowerCase().includes(searchQuery.toLowerCase());
-      return matchesCat && matchesSearch;
+    const list = productsList.filter(p => {
+      if (searchQuery.trim().length > 0) {
+        return p.name.toLowerCase().includes(searchQuery.toLowerCase());
+      }
+      return activeCategory === 'All' || p.category === activeCategory;
+    });
+    
+    return list.sort((a, b) => {
+      const aInStock = a.inStock && a.stock > 0;
+      const bInStock = b.inStock && b.stock > 0;
+      if (aInStock === bInStock) return 0;
+      return aInStock ? -1 : 1;
     });
   }, [activeCategory, searchQuery, productsList]);
 
@@ -154,7 +171,6 @@ export default function App() {
       }
       return [...prev, { ...product, quantity: 1 }];
     });
-    // No longer opening cart automatically!
   };
 
   const updateQuantity = (id: string, delta: number) => {
@@ -244,11 +260,38 @@ export default function App() {
   };
 
   const updateOrderStatus = async (orderId: string, status: Order['status']) => {
+    const orderToUpdate = orders.find(o => o.id === orderId);
+    if (!orderToUpdate) return;
+    
+    const oldStatus = orderToUpdate.status;
     setOrders(prev => prev.map(o => o.id === orderId ? { ...o, status } : o));
     
     // Sync to Supabase
     if (supabase) {
       await supabase.from('orders').update({ status }).eq('id', orderId);
+    }
+
+    // Handle stock changes
+    const doUpdateStock = async (changes: {id: string, delta: number}[]) => {
+      setProductsList(prev => prev.map(p => {
+        const change = changes.find(c => c.id === p.id);
+        if(change) return { ...p, stock: Math.max(0, p.stock + change.delta) };
+        return p;
+      }));
+      if (supabase) {
+        for(const change of changes) {
+            const p = productsList.find(pr => pr.id === change.id);
+            if (p) {
+              await supabase.from('products').update({ stock: Math.max(0, p.stock + change.delta) }).eq('id', change.id);
+            }
+        }
+      }
+    };
+
+    if (status === 'rejected' && oldStatus !== 'rejected') {
+       doUpdateStock(orderToUpdate.items.map(item => ({ id: item.id, delta: item.quantity })));
+    } else if (status !== 'rejected' && oldStatus === 'rejected') {
+       doUpdateStock(orderToUpdate.items.map(item => ({ id: item.id, delta: -item.quantity })));
     }
   };
 
@@ -289,16 +332,31 @@ export default function App() {
               <div className={`relative group transition-all duration-300 ease-in-out ${isSearchExpanded ? 'w-full max-w-2xl' : 'w-10 sm:w-12 mx-2'}`}>
                 {isSearchExpanded ? (
                   <>
-                    <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-white/50 group-focus-within:text-white transition-colors z-10" size={18} />
+                    <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-white/50 z-10" size={18} />
                     <input 
                       autoFocus
                       type="text" 
                       placeholder="Search cravings..." 
                       value={searchQuery}
                       onChange={(e) => setSearchQuery(e.target.value)}
-                      onBlur={() => { if(!searchQuery) setIsSearchExpanded(false); }}
-                      className="bg-black/30 border border-white/10 hover:border-white/20 focus:border-white/40 focus:bg-black/50 text-white w-full pl-11 pr-6 py-2.5 sm:py-3 rounded-full text-sm sm:text-base outline-none transition-all shadow-inner"
+                      onBlur={(e) => { 
+                        // Don't close if clicking the close button
+                        if (e.relatedTarget?.id !== 'close-search') {
+                          if(!searchQuery) setIsSearchExpanded(false); 
+                        }
+                      }}
+                      className="bg-black/30 border border-white/10 hover:border-white/20 focus:border-white/40 focus:bg-black/50 text-white w-full px-11 py-2.5 sm:py-3 rounded-full text-sm sm:text-base outline-none transition-all shadow-inner"
                     />
+                    <button 
+                      id="close-search"
+                      onClick={() => {
+                        setSearchQuery('');
+                        setIsSearchExpanded(false);
+                      }}
+                      className="absolute right-4 top-1/2 -translate-y-1/2 text-white/50 hover:text-white transition-colors z-10 p-1"
+                    >
+                      <X size={16} />
+                    </button>
                   </>
                 ) : (
                   <button 
@@ -325,58 +383,74 @@ export default function App() {
           </div>
         </nav>
 
-        {/* Hero Section */}
-        <header className="mb-8 mt-6 sm:mt-12 text-center md:text-left">
-          <h1 className="text-4xl sm:text-5xl md:text-6xl xl:text-7xl font-bold mb-4 sm:mb-6 leading-tight">
-            Fuel your <br className="hidden md:block"/>
-            <span className="text-transparent bg-clip-text bg-gradient-to-r from-pink-400 via-purple-400 to-indigo-400">
-              study sessions.
-            </span>
-          </h1>
-          <p className="text-base sm:text-lg text-white/70 max-w-md mx-auto md:mx-0">
-            Midnight cravings? We deliver premium snacks right to your hostel room in minutes.
-          </p>
-        </header>
+        {siteStatus === 'offline' ? (
+           <div className="flex-1 flex flex-col items-center justify-center text-center mt-20">
+              <svg viewBox="0 0 100 100" className="w-48 h-48 mb-8 text-indigo-300 drop-shadow-[0_0_15px_rgba(165,180,252,0.3)]">
+                 <path d="M50 85 C40 85 30 75 30 60 C30 45 40 30 50 20 C60 30 70 45 70 60 C70 75 60 85 50 85 Z" fill="currentColor" fillOpacity="0.2" stroke="currentColor" strokeWidth="2"/>
+                 <circle cx="42" cy="50" r="4" fill="currentColor"/>
+                 <circle cx="58" cy="50" r="4" fill="currentColor"/>
+                 <path d="M48 60 Q50 65 52 60" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+                 <path d="M20 30 Q30 20 40 35" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+                 <path d="M80 30 Q70 20 60 35" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+                 <text x="70" y="30" fontSize="12" fill="currentColor" fontFamily="monospace" style={{animation: "float 3s infinite ease-in-out"}}>Z</text>
+                 <text x="80" y="20" fontSize="16" fill="currentColor" fontFamily="monospace" style={{animation: "float 3s infinite ease-in-out 1s"}}>Z</text>
+                 <text x="90" y="10" fontSize="20" fill="currentColor" fontFamily="monospace" style={{animation: "float 3s infinite ease-in-out 2s"}}>Z</text>
+              </svg>
+              <h2 className="text-3xl font-bold mb-4">Shh... The owl is sleeping</h2>
+              <p className="text-white/60 text-lg">We are currently not accepting orders. Check back later!</p>
+           </div>
+        ) : (
+          <>
+            {/* Hero Section */}
+            <header className="mb-8 mt-6 sm:mt-12 text-center md:text-left">
+              <h1 className="text-4xl sm:text-5xl md:text-6xl xl:text-7xl font-bold mb-4 sm:mb-6 leading-tight">
+                Crave it. <br className="hidden md:block"/>
+                <span className="text-transparent bg-clip-text bg-gradient-to-r from-pink-400 via-purple-400 to-indigo-400">
+                  Click it. Crunch it.
+                </span>
+              </h1>
+            </header>
 
-        {/* Categories */}
-        <div className="flex overflow-x-auto pb-4 mb-8 -mx-4 px-4 sm:mx-0 sm:px-0 gap-3 no-scrollbar [&::-webkit-scrollbar]:hidden">
-          {categories.map(cat => (
-            <button
-              key={cat}
-              onClick={() => setActiveCategory(cat)}
-              className={`whitespace-nowrap px-5 sm:px-6 py-2 sm:py-2.5 rounded-full border transition-all duration-300 text-sm sm:text-base ${
-                activeCategory === cat 
-                  ? 'bg-white text-black border-white shadow-[0_0_20px_rgba(255,255,255,0.3)] font-medium' 
-                  : 'glass-panel border-white/20 hover:bg-white/10 font-medium text-white/80'
-              }`}
-            >
-              {cat}
-            </button>
-          ))}
-        </div>
+            {/* Categories */}
+            <div className="flex overflow-x-auto pb-4 mb-8 -mx-4 px-4 sm:mx-0 sm:px-0 gap-3 no-scrollbar [&::-webkit-scrollbar]:hidden">
+              {categories.map(cat => (
+                <button
+                  key={cat}
+                  onClick={() => setActiveCategory(cat)}
+                  className={`whitespace-nowrap px-5 sm:px-6 py-2 sm:py-2.5 rounded-full border transition-all duration-300 text-sm sm:text-base ${
+                    activeCategory === cat 
+                      ? 'bg-white text-black border-white shadow-[0_0_20px_rgba(255,255,255,0.3)] font-medium' 
+                      : 'glass-panel border-white/20 hover:bg-white/10 font-medium text-white/80'
+                  }`}
+                >
+                  {cat}
+                </button>
+              ))}
+            </div>
 
-        {/* Products Grid - Increased Density (4+ columns on larger screens) */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 gap-3 sm:gap-5 xl:gap-6">
-          {filteredProducts.map(product => {
-            const cartItem = cartItems.find(item => item.id === product.id);
-            return (
-              <ProductCard 
-                key={product.id} 
-                product={product} 
-                cartQuantity={cartItem ? cartItem.quantity : 0}
-                onAdd={addToCart} 
-                onUpdate={updateQuantity}
-              />
-            );
-          })}
-        </div>
-        
-        {filteredProducts.length === 0 && (
-          <div className="text-center py-20 bg-white/5 rounded-3xl border border-white/10 glass-backdrop-sm mt-8">
-            <p className="text-xl text-white/60">No snacks found matching your craving.</p>
-          </div>
+            {/* Products Grid - Increased Density (4+ columns on larger screens) */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 gap-3 sm:gap-5 xl:gap-6">
+              {filteredProducts.map(product => {
+                const cartItem = cartItems.find(item => item.id === product.id);
+                return (
+                  <ProductCard 
+                    key={product.id} 
+                    product={product} 
+                    cartQuantity={cartItem ? cartItem.quantity : 0}
+                    onAdd={addToCart} 
+                    onUpdate={updateQuantity}
+                  />
+                );
+              })}
+            </div>
+            
+            {filteredProducts.length === 0 && (
+              <div className="text-center py-20 bg-white/5 rounded-3xl border border-white/10 glass-backdrop-sm mt-8">
+                <p className="text-xl text-white/60">No snacks found matching your craving.</p>
+              </div>
+            )}
+          </>
         )}
-
       </div>
 
       {/* Footer */}
@@ -432,6 +506,13 @@ export default function App() {
             setProducts={setProductsList}
             qrCodeUrl={qrCodeUrl}
             setQrCodeUrl={setQrCodeUrl}
+            siteStatus={siteStatus}
+            setSiteStatus={async (s) => {
+              setSiteStatus(s);
+              if (supabase) {
+                await supabase.from('payment_config').update({ qr_code_url: s }).eq('id', 'site_status');
+              }
+            }}
             orders={orders}
             updateOrderStatus={updateOrderStatus}
             onClose={() => setIsDevMode(false)}
