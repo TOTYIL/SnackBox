@@ -24,6 +24,7 @@ export const DevPage: React.FC<DevPageProps> = ({ products, setProducts, qrCodeU
   
   // Real-time ticker for 1-hour expiration logic
   const [now, setNow] = useState(Date.now());
+  const [rageTaps, setRageTaps] = useState<{ [orderId: string]: number }>({});
   useEffect(() => {
     const interval = setInterval(() => setNow(Date.now()), 60000); // Check every minute
     return () => clearInterval(interval);
@@ -31,6 +32,8 @@ export const DevPage: React.FC<DevPageProps> = ({ products, setProducts, qrCodeU
   
   // Computed Orders
   const HOUR_MS = 60 * 60 * 1000;
+  const FIFTEEN_MIN_MS = 15 * 60 * 1000;
+
   const displayOrders = orders.map(o => {
     const age = now - new Date(o.date).getTime();
     const isOld = age > HOUR_MS;
@@ -40,9 +43,24 @@ export const DevPage: React.FC<DevPageProps> = ({ products, setProducts, qrCodeU
     if (isOld && (computedStatus === 'pending' || computedStatus === 'accepted')) {
       computedStatus = 'completed';
     }
+
+    // Cancel forever if pending for > 15 mins
+    if (computedStatus === 'pending' && age > FIFTEEN_MIN_MS) {
+      computedStatus = 'expired' as any;
+    }
     
-    return { ...o, computedStatus, isOld };
-  }).filter(o => !(o.computedStatus === 'rejected' && o.isOld)); // Auto-disappear rejected after 1 hr
+    return { ...o, computedStatus, isOld, age };
+  });
+
+  const liveOrders = displayOrders.filter(o => o.computedStatus !== 'completed' && o.computedStatus !== 'rejected' && o.computedStatus !== 'expired' && o.computedStatus !== 'rage_blocked');
+  const historyOrders = displayOrders.filter(o => {
+    if (o.computedStatus === 'completed' || o.computedStatus === 'expired' || o.computedStatus === 'rage_blocked') return true;
+    // If rejected and not changed till 15 minutes it gets deleted
+    if (o.computedStatus === 'rejected') {
+      return o.age <= FIFTEEN_MIN_MS;
+    }
+    return false;
+  });
 
   // Edit mode for inventory item
   const [editingItemId, setEditingItemId] = useState<string | null>(null);
@@ -142,8 +160,8 @@ export const DevPage: React.FC<DevPageProps> = ({ products, setProducts, qrCodeU
               className={`flex flex-1 justify-center items-center gap-2 px-3 sm:px-5 py-3 rounded-t-xl transition-colors font-medium text-sm sm:text-base ${activeTab === 'orders' ? 'bg-white/10 text-white border-b-2 border-pink-400' : 'text-white/60 hover:text-white'}`}
             >
               <ClipboardList size={18} className="shrink-0" /> <span className="hidden sm:inline">Live Orders</span>
-              {orders.length > 0 && (
-                <span className="bg-pink-500 text-white text-xs px-2 py-0.5 rounded-full ml-1">{orders.length}</span>
+              {liveOrders.length > 0 && (
+                <span className="bg-pink-500 text-white text-xs px-2 py-0.5 rounded-full ml-1">{liveOrders.length}</span>
               )}
             </button>
             <button 
@@ -167,13 +185,13 @@ export const DevPage: React.FC<DevPageProps> = ({ products, setProducts, qrCodeU
           {/* ORDERS TAB */}
           {activeTab === 'orders' && (
             <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="flex flex-col gap-4">
-              {displayOrders.length === 0 ? (
+              {liveOrders.length === 0 ? (
                 <div className="text-center py-16 bg-white/5 rounded-3xl border border-white/10">
                   <ClipboardList size={48} className="mx-auto text-white/20 mb-4" />
-                  <p className="text-xl text-white/60">No pending orders yet.</p>
+                  <p className="text-xl text-white/60">No live orders right now.</p>
                 </div>
               ) : (
-                displayOrders.map(order => {
+                liveOrders.map(order => {
                   const statusColors = {
                     pending: 'bg-yellow-500/20 text-yellow-300',
                     accepted: 'bg-blue-500/20 text-blue-300',
@@ -208,6 +226,12 @@ export const DevPage: React.FC<DevPageProps> = ({ products, setProducts, qrCodeU
                           <p className="text-xs text-white/50 mb-1">Phone</p>
                           <p className="font-medium text-sm">{order.phone}</p>
                         </div>
+                        <div>
+                          <p className="text-xs text-white/50 mb-1">Payment</p>
+                          <p className="font-medium text-sm text-indigo-300 uppercase">
+                            {order.paymentMethod === 'prepaid' ? 'Prepaid (Pay Now)' : order.paymentMethod === 'cod' ? 'Cash on Delivery (COD)' : 'Not Specified'}
+                          </p>
+                        </div>
                       </div>
                       
                       <div className="bg-black/30 rounded-xl p-4 mt-2">
@@ -237,6 +261,20 @@ export const DevPage: React.FC<DevPageProps> = ({ products, setProducts, qrCodeU
                               <button onClick={() => updateOrderStatus(order.id, 'rejected')} className="flex items-center justify-center gap-2 flex-1 bg-red-500/20 text-red-300 hover:bg-red-500/30 transition py-2.5 rounded-xl font-medium">
                                 <X size={16} /> Reject
                               </button>
+                              <button 
+                                onClick={() => {
+                                  const taps = (rageTaps[order.id] || 0) + 1;
+                                  if (taps >= 5) {
+                                     setRageTaps(prev => ({...prev, [order.id]: 0}));
+                                     updateOrderStatus(order.id, 'rage_blocked');
+                                  } else {
+                                     setRageTaps(prev => ({...prev, [order.id]: taps}));
+                                  }
+                                }}
+                                className="flex items-center justify-center w-full px-2 py-1 text-xs text-transparent hover:text-white/20 transition-colors"
+                              >
+                                Cock Sucker Mode
+                              </button>
                             </>
                           )}
                           {order.computedStatus === 'accepted' && (
@@ -246,6 +284,9 @@ export const DevPage: React.FC<DevPageProps> = ({ products, setProducts, qrCodeU
                               </button>
                               <button onClick={() => updateOrderStatus(order.id, 'rejected')} className="flex items-center justify-center gap-2 flex-1 bg-red-500/20 text-red-300 hover:bg-red-500/30 transition py-2.5 rounded-xl font-medium">
                                 <X size={16} /> Cancel Order
+                              </button>
+                              <button onClick={() => updateOrderStatus(order.id, 'pending')} className="flex items-center justify-center gap-2 flex-1 bg-white/10 text-white hover:bg-white/20 transition py-2.5 rounded-xl font-medium">
+                                <RotateCcw size={16} /> Undo Accept
                               </button>
                             </>
                           )}
@@ -265,10 +306,112 @@ export const DevPage: React.FC<DevPageProps> = ({ products, setProducts, qrCodeU
                           </button>
                         </div>
                       )}
-                      
-                    </div>
+                                       </div>
                   </div>
                 )})
+              )}
+
+              {/* History below Live Orders */}
+              {historyOrders.length > 0 && (
+                <div className="mt-12">
+                  <h3 className="text-xl font-bold mb-6 text-white/50 border-b border-white/10 pb-2">History</h3>
+                  <div className="flex flex-col gap-4">
+                    {historyOrders.map(order => {
+                      const statusColors: Record<string, string> = {
+                        pending: 'bg-yellow-500/20 text-yellow-300',
+                        accepted: 'bg-blue-500/20 text-blue-300',
+                        completed: 'bg-green-500/20 text-green-300',
+                        rejected: 'bg-red-500/20 text-red-300',
+                        expired: 'bg-red-500/20 text-red-300',
+                        rage_blocked: 'bg-red-500/20 text-red-300'
+                      };
+                      return (
+                      <div key={order.id} className={`glass-panel p-5 sm:p-6 rounded-3xl border transition-all duration-500 flex flex-col md:flex-row gap-6 justify-between items-start border-white/10 ${order.computedStatus === 'rejected' ? 'grayscale opacity-60' : 'opacity-80'}`}>
+                        <div className="flex-1 space-y-4 w-full">
+                          <div className="flex justify-between items-start border-b border-white/10 pb-4">
+                            <div>
+                              <h3 className="text-lg font-bold flex items-center gap-2">
+                                Order Code: <span className="text-white/70 font-mono">{order.id}</span>
+                              </h3>
+                              <p className="text-sm text-white/50">{new Date(order.date).toLocaleString()}</p>
+                            </div>
+                            <span className={`glass-pill px-3 py-1 text-xs font-semibold uppercase tracking-wider ${/*ts-ignore*/statusColors[order.computedStatus]}`}>
+                              {order.computedStatus}
+                            </span>
+                          </div>
+                          
+                          <div className="grid grid-cols-2 gap-4">
+                            <div>
+                              <p className="text-xs text-white/50 mb-1">Customer</p>
+                              <p className="font-medium text-sm">{order.customerName}</p>
+                            </div>
+                            <div>
+                              <p className="text-xs text-white/50 mb-1">Room</p>
+                              <p className="font-medium text-sm text-white/80">{order.room}</p>
+                            </div>
+                            <div>
+                              <p className="text-xs text-white/50 mb-1">Phone</p>
+                              <p className="font-medium text-sm">{order.phone}</p>
+                            </div>
+                            <div>
+                              <p className="text-xs text-white/50 mb-1">Payment</p>
+                              <p className="font-medium text-sm text-white/80 uppercase">
+                                {order.paymentMethod === 'prepaid' ? 'Prepaid (Pay Now)' : order.paymentMethod === 'cod' ? 'Cash on Delivery (COD)' : 'Not Specified'}
+                              </p>
+                            </div>
+                          </div>
+                          
+                          <div className="bg-black/30 rounded-xl p-4 mt-2">
+                            <ul className="space-y-2">
+                              {order.items.map(item => (
+                                <li key={item.id} className="flex justify-between text-sm text-white/70">
+                                  <span><span className="text-white/50 mr-2">{item.quantity}x</span> {item.name}</span>
+                                  <span>₹{(item.price * item.quantity).toFixed(2)}</span>
+                                </li>
+                              ))}
+                            </ul>
+                            <div className="mt-4 pt-3 border-t border-white/10 flex justify-between font-bold">
+                              <span>Total</span>
+                              <span className="text-white/80">₹{order.total.toFixed(2)}</span>
+                            </div>
+                          </div>
+                      
+                          {/* History Action Buttons */}
+                          {order.computedStatus === 'rage_blocked' && (
+                            <div className="mt-4 p-4 border border-red-500/50 bg-red-500/20 rounded-xl flex justify-between items-center">
+                               <p className="text-red-400 font-bold text-sm uppercase flex items-center gap-2">
+                                  <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse"></span>
+                                  Cock Sucker Found
+                               </p>
+                               <button 
+                                 onClick={() => {
+                                   updateOrderStatus(order.id, 'rejected'); // Close mode
+                                 }}
+                                 className="bg-red-600/50 hover:bg-red-500 text-white text-xs px-3 py-1.5 rounded-lg font-medium transition cursor-pointer"
+                               >
+                                  Forgive
+                               </button>
+                            </div>
+                          )}
+                          {!order.isOld && order.computedStatus === 'rejected' && (
+                            <div className="mt-4 pt-4 border-t border-white/10">
+                              <button onClick={() => updateOrderStatus(order.id, 'pending')} className="flex items-center justify-center gap-2 w-full bg-white/5 text-white/70 hover:bg-white/10 transition py-2.5 rounded-xl font-medium">
+                                <RotateCcw size={16} /> Undo Reject
+                              </button>
+                            </div>
+                          )}
+                          {!order.isOld && order.computedStatus === 'completed' && (
+                            <div className="mt-4 pt-4 border-t border-white/10">
+                              <button onClick={() => updateOrderStatus(order.id, 'accepted')} className="flex items-center justify-center gap-2 w-full bg-white/5 text-white/70 hover:bg-white/10 transition py-2.5 rounded-xl font-medium">
+                                <RotateCcw size={16} /> Undo Completion
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )})}
+                  </div>
+                </div>
               )}
             </motion.div>
           )}
@@ -358,8 +501,9 @@ export const DevPage: React.FC<DevPageProps> = ({ products, setProducts, qrCodeU
 
           {/* PAYMENT TAB */}
           {activeTab === 'payment' && (
-            <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="glass-panel p-6 sm:p-8 rounded-[2rem] max-w-2xl border border-white/20">
-              <h2 className="text-2xl font-semibold mb-6">Site Configuration</h2>
+            <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="flex justify-center">
+              <div className="glass-panel w-full p-6 sm:p-8 rounded-[2rem] max-w-2xl border border-white/20">
+                <h2 className="text-2xl font-semibold mb-6">Site Configuration</h2>
               
               <div className="mb-10 p-5 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-between">
                 <div>
@@ -406,6 +550,7 @@ export const DevPage: React.FC<DevPageProps> = ({ products, setProducts, qrCodeU
               >
                 <Save size={18} /> Update Payment Settings
               </button>
+              </div>
             </motion.div>
           )}
 

@@ -121,21 +121,40 @@ export default function App() {
     `).order('date', { ascending: false });
     
     if (dbOrders) {
-      setOrders(dbOrders.map(o => ({
-        id: o.id,
-        customerName: o.customer_name,
-        phone: o.phone,
-        room: o.room,
-        date: o.date,
-        total: Number(o.total),
-        status: o.status as Order['status'],
-        items: o.order_items.map((oi: any) => ({
-          id: oi.product_id,
-          name: oi.name,
-          price: Number(oi.price),
-          quantity: oi.quantity
-        }))
-      })));
+      setOrders(dbOrders.map(o => {
+        let actualRoom = o.room;
+        let paymentMethod: 'cod' | 'prepaid' | undefined = undefined;
+        // Try to read from payment_method column if it exists!
+        if (o.payment_method) {
+           paymentMethod = o.payment_method;
+        } else if (typeof o.room === 'string' && o.room.includes('||')) {
+          const parts = o.room.split('||');
+          actualRoom = parts[0];
+          paymentMethod = parts[1] as 'cod' | 'prepaid';
+        }
+        
+        // Default to cod if missing
+        if (!paymentMethod) {
+          paymentMethod = 'cod';
+        }
+
+        return {
+          id: o.id,
+          customerName: o.customer_name,
+          phone: o.phone,
+          room: actualRoom,
+          paymentMethod,
+          date: o.date,
+          total: Number(o.total),
+          status: o.status as Order['status'],
+          items: o.order_items.map((oi: any) => ({
+            id: oi.product_id,
+            name: oi.name,
+            price: Number(oi.price),
+            quantity: oi.quantity
+          }))
+        };
+      }));
     }
   };
 
@@ -147,12 +166,31 @@ export default function App() {
     }
   }, [searchQuery]);
 
+  const productCategories = useMemo(() => {
+    return ['All', ...Array.from(new Set(productsList.map(p => {
+      const c = (p.category || '').trim();
+      return c ? c.charAt(0).toUpperCase() + c.slice(1).toLowerCase() : '';
+    })))].filter(Boolean);
+  }, [productsList]);
+
+  // Check rage mode via user orders
+  const isRageBlocked = useMemo(() => {
+    return orders.some(o => 
+      sessionOrderIds.includes(o.id) && 
+      o.status === 'rage_blocked' && 
+      Date.now() - new Date(o.date).getTime() < 2 * 60 * 60 * 1000
+    );
+  }, [orders, sessionOrderIds]);
+
   const filteredProducts = useMemo(() => {
     const list = productsList.filter(p => {
       if (searchQuery.trim().length > 0) {
         return p.name.toLowerCase().includes(searchQuery.toLowerCase());
       }
-      return activeCategory === 'All' || p.category === activeCategory;
+      if (activeCategory === 'All') return true;
+      const prodCat = (p.category || '').trim().toLowerCase();
+      const activeLower = activeCategory.trim().toLowerCase();
+      return prodCat === activeLower;
     });
     
     return list.sort((a, b) => {
@@ -163,7 +201,7 @@ export default function App() {
     });
   }, [activeCategory, searchQuery, productsList]);
 
-  const addToCart = (product: Product) => {
+  const addToCart = React.useCallback((product: Product) => {
     setCartItems(prev => {
       const existing = prev.find(item => item.id === product.id);
       if (existing) {
@@ -171,9 +209,9 @@ export default function App() {
       }
       return [...prev, { ...product, quantity: 1 }];
     });
-  };
+  }, []);
 
-  const updateQuantity = (id: string, delta: number) => {
+  const updateQuantity = React.useCallback((id: string, delta: number) => {
     setCartItems(prev => prev.map(item => {
       if (item.id === id) {
         const newQ = item.quantity + delta;
@@ -181,19 +219,20 @@ export default function App() {
       }
       return item;
     }).filter(Boolean) as CartItem[]);
-  };
+  }, []);
 
   const startCheckout = () => {
     setIsCartOpen(false);
     setIsCheckoutOpen(true);
   };
 
-  const finishCheckout = async (customerData: {name: string, phone: string, room: string, id: string}) => {
+  const finishCheckout = async (customerData: {name: string, phone: string, room: string, id: string, paymentMethod?: 'cod' | 'prepaid'}) => {
     const newOrder: Order = {
       id: customerData.id,
       customerName: customerData.name,
       phone: customerData.phone,
       room: customerData.room,
+      paymentMethod: customerData.paymentMethod,
       items: cartItems.map(item => ({
         id: item.id,
         name: item.name,
@@ -208,16 +247,8 @@ export default function App() {
     // Update local state first to feel fast
     setOrders(prev => [newOrder, ...prev]);
     
-    // Deduct stock from productsList local state
-    setProductsList(prevProducts => 
-      prevProducts.map(p => {
-        const cartItem = cartItems.find(item => item.id === p.id);
-        if (cartItem) {
-          return { ...p, stock: Math.max(0, p.stock - cartItem.quantity) };
-        }
-        return p;
-      })
-    );
+    // Do NOT Deduct stock here. Wait until order is accepted.
+    setProductsList(prevProducts => [...prevProducts]);
     
     setCartItems([]);
     setIsCheckoutOpen(false);
@@ -234,7 +265,7 @@ export default function App() {
         id: newOrder.id,
         customer_name: newOrder.customerName,
         phone: newOrder.phone,
-        room: newOrder.room,
+        room: newOrder.room + (customerData.paymentMethod ? '||' + customerData.paymentMethod : ''),
         total: newOrder.total,
         status: newOrder.status,
         date: newOrder.date
@@ -248,14 +279,8 @@ export default function App() {
         quantity: item.quantity
       })));
 
-      // Deduct stock in DB
-      for (const item of newOrder.items) {
-        // Find current stock
-        const p = productsList.find(pr => pr.id === item.id);
-        if (p) {
-          await supabase.from('products').update({ stock: Math.max(0, p.stock - item.quantity) }).eq('id', item.id);
-        }
-      }
+      // Do NOT Deduct stock in DB yet. Wait until accept.
+      // for (const item of newOrder.items) { ... }
     }
   };
 
@@ -288,10 +313,16 @@ export default function App() {
       }
     };
 
-    if (status === 'rejected' && oldStatus !== 'rejected') {
-       doUpdateStock(orderToUpdate.items.map(item => ({ id: item.id, delta: item.quantity })));
-    } else if (status !== 'rejected' && oldStatus === 'rejected') {
-       doUpdateStock(orderToUpdate.items.map(item => ({ id: item.id, delta: -item.quantity })));
+    const stockIsDeducted = (s: Order['status']) => s === 'accepted' || s === 'completed';
+    const oldDeducted = stockIsDeducted(oldStatus);
+    const newDeducted = stockIsDeducted(status);
+
+    if (!oldDeducted && newDeducted) {
+      // Transitioned to Accepted/Completed: Deduct Stock
+      doUpdateStock(orderToUpdate.items.map(item => ({ id: item.id, delta: -item.quantity })));
+    } else if (oldDeducted && !newDeducted) {
+      // Transitioned to Pending/Rejected: Restore Stock
+      doUpdateStock(orderToUpdate.items.map(item => ({ id: item.id, delta: item.quantity })));
     }
   };
 
@@ -309,6 +340,19 @@ export default function App() {
       return true;
     });
   }, [orders, sessionOrderIds]);
+
+  if (isRageBlocked) {
+    return (
+      <div className="fixed inset-0 z-[99999] bg-black flex flex-col items-center justify-center p-8">
+        <div className="max-w-2xl w-full p-8 sm:p-16 bg-red-950/40 border-[4px] border-red-600 rounded-3xl text-center shadow-[0_0_100px_rgba(220,38,38,0.5)] relative">
+          <h1 className="text-4xl sm:text-6xl font-black text-red-500 tracking-tighter uppercase leading-tight">
+            YOUR ORDER WAS CANCELED BECAUSE YOU ARE A COCK SUCKER
+          </h1>
+          <p className="mt-8 text-red-400/80 font-bold tracking-widest text-sm uppercase">Access Denied</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <>
@@ -413,7 +457,7 @@ export default function App() {
 
             {/* Categories */}
             <div className="flex overflow-x-auto pb-4 mb-8 -mx-4 px-4 sm:mx-0 sm:px-0 gap-3 no-scrollbar [&::-webkit-scrollbar]:hidden">
-              {categories.map(cat => (
+              {productCategories.map(cat => (
                 <button
                   key={cat}
                   onClick={() => setActiveCategory(cat)}

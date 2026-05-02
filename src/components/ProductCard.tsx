@@ -10,7 +10,7 @@ interface ProductCardProps {
   onUpdate: (id: string, delta: number) => void;
 }
 
-export const ProductCard: React.FC<ProductCardProps> = ({ product, cartQuantity, onAdd, onUpdate }) => {
+export const ProductCard: React.FC<ProductCardProps> = React.memo(({ product, cartQuantity, onAdd, onUpdate }) => {
   return (
     <motion.div 
       initial={{ opacity: 0, y: 20 }}
@@ -21,7 +21,8 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, cartQuantity,
         <div className="absolute inset-0 bg-black/10 group-hover:bg-transparent transition-colors z-10" />
         <img 
           src={product.image} 
-          alt={product.name} 
+          alt={product.name}
+          loading="lazy"
           className="w-full h-full object-cover transform group-hover:scale-110 transition-transform duration-500"
         />
         <div className="absolute top-2 left-2 z-20">
@@ -73,5 +74,5 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, cartQuantity,
       </div>
     </motion.div>
   );
-};
+});
 

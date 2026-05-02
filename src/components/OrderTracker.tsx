@@ -104,12 +104,11 @@ export const OrderTracker: React.FC<OrderTrackerProps> = ({ orders, isOpen, onCl
                       </div>
                     </div>
                     
-                    {order.status === 'rejected' && (
+                    {(order.status === 'rejected' || order.status === 'rage_blocked') && (
                         <div className="absolute inset-0 bg-red-950/80 glass-backdrop-sm flex flex-col items-center justify-center text-center p-4 z-20">
                             <XCircle className="text-red-400 w-12 h-12 mb-2" />
                             <h3 className="font-bold text-white mb-1">Order Cancelled</h3>
-                            <p className="text-sm text-white/70 mb-4">Your order was cancelled.</p>
-                            <button onClick={() => onClearOrder(order.id)} className="bg-white text-black px-4 py-2 rounded-full font-semibold text-sm">Dismiss</button>
+                            <button onClick={() => onClearOrder(order.id)} className="bg-white text-black mt-2 px-4 py-2 rounded-full font-semibold text-sm">Dismiss</button>
                         </div>
                     )}
                   </div>

@@ -7,7 +7,7 @@ interface CheckoutModalProps {
   onClose: () => void;
   total: number;
   qrCodeUrl: string;
-  onComplete: (data: {name: string, phone: string, room: string, id: string}) => void;
+  onComplete: (data: {name: string, phone: string, room: string, id: string, paymentMethod?: 'cod' | 'prepaid'}) => void;
 }
 
 export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose, total, qrCodeUrl, onComplete }) => {
@@ -42,10 +42,10 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose, t
     }
   };
 
-  const handleFinish = () => {
+  const handleFinish = (method: 'cod' | 'prepaid') => {
     setStep('success');
     setTimeout(() => {
-      onComplete({ name, phone, room, id: paymentCode }); // Closes modal and clears cart
+      onComplete({ name, phone, room, id: paymentCode, paymentMethod: method }); // Closes modal and clears cart
     }, 2500);
   };
 
@@ -169,7 +169,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose, t
                   </button>
 
                   <button 
-                    onClick={handleFinish}
+                    onClick={() => handleFinish('cod')}
                     className="w-full bg-white/10 hover:bg-white/20 border border-white/10 rounded-2xl p-6 flex flex-col items-center justify-center gap-3 transition-colors group"
                   >
                     <div className="w-12 h-12 rounded-full bg-green-500/20 text-green-400 flex items-center justify-center group-hover:scale-110 transition-transform">
@@ -214,7 +214,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose, t
                 </div>
 
                 <button 
-                  onClick={handleFinish}
+                  onClick={() => handleFinish('prepaid')}
                   className="w-full bg-gradient-to-r from-pink-500 to-indigo-500 text-white font-semibold rounded-full p-4 flex items-center justify-center gap-2 hover:opacity-90 transition shadow-[0_0_20px_rgba(236,72,153,0.3)]"
                 >
                   <CheckCircle size={18} /> I have paid
