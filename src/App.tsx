@@ -319,7 +319,7 @@ export default function App() {
         </div>
         
         {filteredProducts.length === 0 && (
-          <div className="text-center py-20 bg-white/5 rounded-3xl border border-white/10 backdrop-blur-sm mt-8">
+          <div className="text-center py-20 bg-white/5 rounded-3xl border border-white/10 glass-backdrop-sm mt-8">
             <p className="text-xl text-white/60">No snacks found matching your craving.</p>
           </div>
         )}

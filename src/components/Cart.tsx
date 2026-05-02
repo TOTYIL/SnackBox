@@ -27,7 +27,7 @@ export const Cart: React.FC<CartProps> = ({ isOpen, onClose, items, updateQuanti
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             onClick={onClose}
-            className="fixed inset-0 bg-black/40 backdrop-blur-sm z-40"
+            className="fixed inset-0 bg-black/40 glass-backdrop-sm z-40"
           />
           <motion.div
             initial={{ x: "100%" }}

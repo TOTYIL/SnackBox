@@ -12,7 +12,7 @@ const PageContainer: React.FC<{onClose: () => void, title: string, children: Rea
       initial={{ opacity: 0, y: 50 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: 50 }}
-      className="fixed inset-0 z-50 overflow-y-auto bg-black/60 backdrop-blur-xl"
+      className="fixed inset-0 z-50 overflow-y-auto bg-black/60 glass-backdrop-xl"
     >
       <div className="max-w-4xl mx-auto p-4 sm:p-6 md:p-12 min-h-screen flex flex-col pt-20 sm:pt-24 pb-12">
         <div className="flex items-center gap-4 mb-6 pb-4 border-b border-white/10 text-white">

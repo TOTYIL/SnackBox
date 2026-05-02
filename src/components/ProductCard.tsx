@@ -25,7 +25,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, cartQuantity,
           className="w-full h-full object-cover transform group-hover:scale-110 transition-transform duration-500"
         />
         <div className="absolute top-2 left-2 z-20">
-          <span className={`glass-pill px-3 py-1 text-xs font-semibold backdrop-blur-md ${product.stock < 10 ? 'bg-red-500/80 text-white' : 'bg-black/50 text-white'}`}>
+          <span className={`glass-pill px-3 py-1 text-xs font-semibold glass-backdrop-md ${product.stock < 10 ? 'bg-red-500/80 text-white' : 'bg-black/50 text-white'}`}>
             Stock: {product.stock}
           </span>
         </div>
