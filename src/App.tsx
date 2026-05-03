@@ -20,7 +20,7 @@ export default function App() {
   
   // App Global State
   const [productsList, setProductsList] = useState<Product[]>([]);
-  const [qrCodeUrl, setQrCodeUrl] = useState('https://images.unsplash.com/photo-1614680376593-902f74a5cecb?auto=format&fit=crop&w=400&q=80');
+  const [upiId, setUpiId] = useState('nhempire1717-3@oksbi');
   const [isDevMode, setIsDevMode] = useState(false);
   const [isCartOpen, setIsCartOpen] = useState(false);
   const [isCheckoutOpen, setIsCheckoutOpen] = useState(false);
@@ -132,9 +132,9 @@ export default function App() {
       // Payments Config
       const { data: qData } = await supabase.from('payment_config').select('qr_code_url').eq('id', 'config').single();
       if (qData) {
-        setQrCodeUrl(qData.qr_code_url);
+        setUpiId(qData.qr_code_url);
       } else {
-        await supabase.from('payment_config').insert({ id: 'config', qr_code_url: qrCodeUrl });
+        await supabase.from('payment_config').insert({ id: 'config', qr_code_url: upiId });
       }
 
       // Site Status Config
@@ -162,7 +162,7 @@ export default function App() {
         if (statusData) setSiteStatus(statusData.qr_code_url === 'offline' ? 'offline' : 'live');
         
         const { data: qData } = await supabase.from('payment_config').select('qr_code_url').eq('id', 'config').single();
-        if (qData) setQrCodeUrl(qData.qr_code_url);
+        if (qData) setUpiId(qData.qr_code_url);
       }
     }, 5000);
 
@@ -185,7 +185,7 @@ export default function App() {
              if (payload.new.id === 'site_status') {
                setSiteStatus(payload.new.qr_code_url === 'offline' ? 'offline' : 'live');
              } else if (payload.new.id === 'config') {
-               setQrCodeUrl(payload.new.qr_code_url);
+               setUpiId(payload.new.qr_code_url);
              }
           }
         })
@@ -279,6 +279,14 @@ export default function App() {
   };
 
   const finishCheckout = async (customerData: {name: string, phone: string, room: string, id: string, paymentMethod?: 'cod' | 'prepaid'}) => {
+    let orderTotal = cartItems.reduce((acc, item) => acc + item.price * item.quantity, 0);
+    const cartTotalItems = cartItems.reduce((acc, item) => acc + item.quantity, 0);
+    
+    if (customerData.paymentMethod === 'prepaid') {
+      const discount = Math.min(0.5, cartTotalItems * 0.1);
+      orderTotal -= discount;
+    }
+
     const newOrder: Order = {
       id: customerData.id,
       customerName: customerData.name,
@@ -291,7 +299,7 @@ export default function App() {
         price: item.price,
         quantity: item.quantity
       })),
-      total: cartItems.reduce((acc, item) => acc + item.price * item.quantity, 0),
+      total: orderTotal,
       date: new Date().toISOString(),
       status: 'pending'
     };
@@ -534,7 +542,7 @@ export default function App() {
                   onClick={() => setActiveCategory(cat)}
                   className={`whitespace-nowrap px-5 sm:px-6 py-2 sm:py-2.5 rounded-full border transition-all duration-300 text-sm sm:text-base ${
                     activeCategory === cat 
-                      ? 'bg-white text-black border-white shadow-[0_0_20px_rgba(255,255,255,0.3)] font-medium' 
+                      ? 'bg-white text-black border-white font-medium' 
                       : 'glass-panel border-white/20 hover:bg-white/10 font-medium text-white/80'
                   }`}
                 >
@@ -606,7 +614,8 @@ export default function App() {
         isOpen={isCheckoutOpen}
         onClose={() => setIsCheckoutOpen(false)}
         total={cartTotalPrice}
-        qrCodeUrl={qrCodeUrl}
+        cartTotalItems={cartTotalItems}
+        upiId={upiId}
         onComplete={finishCheckout}
       />
 
@@ -623,8 +632,8 @@ export default function App() {
           <DevPage 
             products={productsList}
             setProducts={setProductsList}
-            qrCodeUrl={qrCodeUrl}
-            setQrCodeUrl={setQrCodeUrl}
+            upiId={upiId}
+            setUpiId={setUpiId}
             siteStatus={siteStatus}
             setSiteStatus={async (s) => {
               setSiteStatus(s);

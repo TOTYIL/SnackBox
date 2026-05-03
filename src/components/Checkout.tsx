@@ -1,18 +1,24 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { X, CheckCircle, ArrowRight, Banknote, QrCode } from 'lucide-react';
+import QRCode from "react-qr-code";
 
 interface CheckoutModalProps {
   isOpen: boolean;
   onClose: () => void;
   total: number;
-  qrCodeUrl: string;
+  cartTotalItems: number;
+  upiId: string;
   onComplete: (data: {name: string, phone: string, room: string, id: string, paymentMethod?: 'cod' | 'prepaid'}) => void;
 }
 
-export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose, total, qrCodeUrl, onComplete }) => {
+export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose, total, cartTotalItems, upiId, onComplete }) => {
   const [step, setStep] = useState<'details' | 'method' | 'payment_online' | 'success'>('details');
   const [paymentCode, setPaymentCode] = useState('');
+  
+  const discountAmount = Math.min(0.5, cartTotalItems * 0.1);
+  const prepaidTotal = total - discountAmount;
+
   
   // Form State
   const [name, setName] = useState('');
@@ -165,6 +171,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose, t
                     <div>
                       <h3 className="font-bold text-lg mb-1">Pay Now</h3>
                       <p className="text-sm text-white/50">Pay via UPI instantly</p>
+                      {discountAmount > 0 && <p className="text-xs text-green-400 mt-1 pb-1">Save ₹{discountAmount.toFixed(2)}!</p>}
                     </div>
                   </button>
 
@@ -195,20 +202,28 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose, t
                 <button onClick={() => setStep('method')} className="text-white/50 text-sm hover:text-white mb-2 ml-auto">← Back</button>
                 <h2 className="text-2xl font-bold mb-2">Complete Payment</h2>
                 <p className="text-white/60 mb-6 text-sm px-4">
-                  Scan the QR code below with any UPI app to pay <b>₹{total.toFixed(2)}</b>.
+                  Scan the QR code below with any UPI app to pay <b className="text-white">₹{prepaidTotal.toFixed(2)}</b>
+                  {discountAmount > 0 && (
+                    <span className="block text-green-400 mt-1">Includes ₹{discountAmount.toFixed(2)} prepaid discount!</span>
+                  )}
                 </p>
 
                 <div className="bg-white p-4 rounded-3xl mx-auto w-48 h-48 mb-6 relative overflow-hidden flex items-center justify-center">
-                  {qrCodeUrl ? (
-                     <img src={qrCodeUrl} alt="Payment QR" className="w-full h-full object-cover rounded-xl" />
+                  {upiId ? (
+                     <QRCode
+                        size={256}
+                        style={{ height: "auto", maxWidth: "100%", width: "100%" }}
+                        value={`upi://pay?pa=${encodeURIComponent(upiId.trim())}&pn=${encodeURIComponent('SnackBox')}&tn=${encodeURIComponent(`Order Code: ${paymentCode}`)}&am=${prepaidTotal.toFixed(2)}&cu=INR`}
+                        viewBox={`0 0 256 256`}
+                      />
                   ) : (
-                     <div className="text-black/50 text-sm">QR Code not set in Dev Page</div>
+                     <div className="text-black/50 text-sm text-center">UPI ID not set in Dev Page</div>
                   )}
                 </div>
 
-                <div className="glass-panel p-4 rounded-2xl mb-8 border border-pink-500/30 bg-pink-500/10">
-                  <p className="text-sm text-white/80 mb-2">Add this exact code in your UPI remark/note:</p>
-                  <div className="text-3xl font-mono font-bold tracking-[0.2em] text-pink-300">
+                <div className="glass-panel p-3 rounded-2xl mb-6 border border-pink-500/30 bg-pink-500/10">
+                  <p className="text-xs text-white/80 mb-1">Order Code (auto-added to remark if supported):</p>
+                  <div className="text-xl font-mono font-bold tracking-[0.2em] text-pink-300">
                     {paymentCode}
                   </div>
                 </div>

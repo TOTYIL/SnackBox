@@ -1,14 +1,14 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Product, Order } from '../data';
-import { Save, Plus, ArrowLeft, PackageSearch, CreditCard, ClipboardList, Edit2, Trash2, Check, X, RotateCcw, Power } from 'lucide-react';
+import { Save, Plus, ArrowLeft, PackageSearch, CreditCard, ClipboardList, Edit2, Trash2, Check, X, RotateCcw, Power, Maximize2, Minimize2, ChevronDown, ChevronUp } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { supabase } from '../lib/supabase';
 
 interface DevPageProps {
   products: Product[];
   setProducts: (products: Product[]) => void;
-  qrCodeUrl: string;
-  setQrCodeUrl: (url: string) => void;
+  upiId: string;
+  setUpiId: (url: string) => void;
   siteStatus: 'live' | 'offline';
   setSiteStatus: (s: 'live' | 'offline') => void;
   orders: Order[];
@@ -17,9 +17,9 @@ interface DevPageProps {
   onClose: () => void;
 }
 
-export const DevPage: React.FC<DevPageProps> = ({ products, setProducts, qrCodeUrl, setQrCodeUrl, siteStatus, setSiteStatus, orders, updateOrderStatus, deleteOrder, onClose }) => {
+export const DevPage: React.FC<DevPageProps> = ({ products, setProducts, upiId, setUpiId, siteStatus, setSiteStatus, orders, updateOrderStatus, deleteOrder, onClose }) => {
   const [localProducts, setLocalProducts] = useState([...products]);
-  const [localQr, setLocalQr] = useState(qrCodeUrl);
+  const [localQr, setLocalQr] = useState(upiId);
   const [activeTab, setActiveTab] = useState<'orders' | 'inventory' | 'payment'>('orders');
   const [editingItemId, setEditingItemId] = useState<string | null>(null);
 
@@ -43,8 +43,8 @@ export const DevPage: React.FC<DevPageProps> = ({ products, setProducts, qrCodeU
   }, [products, editingItemId]);
 
   useEffect(() => {
-    setLocalQr(qrCodeUrl);
-  }, [qrCodeUrl]);
+    setLocalQr(upiId);
+  }, [upiId]);
 
   
   // Real-time ticker for 1-hour expiration logic
@@ -52,12 +52,17 @@ export const DevPage: React.FC<DevPageProps> = ({ products, setProducts, qrCodeU
   const [rageTaps, setRageTaps] = useState<{ [orderId: string]: number }>({});
   const [deleteTaps, setDeleteTaps] = useState<{ [orderId: string]: number }>({});
   
-  // Previous orders reference for notification
+  const [expandedDates, setExpandedDates] = useState<Record<string, boolean>>({ [new Date().toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })]: true });
+  const [isAllExpanded, setIsAllExpanded] = useState(false);
+
   const prevOrdersCountRef = useRef(orders.length);
+  const pendingOrdersCount = orders.filter(o => o.status === 'pending').length;
 
   useEffect(() => {
-    if (orders.length > prevOrdersCountRef.current) {
-      // New order came in, play chime
+    let chimeInterval: any;
+    
+    // Function to play sound
+    const playChime = () => {
       try {
         const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
         if (AudioContextClass) {
@@ -86,9 +91,23 @@ export const DevPage: React.FC<DevPageProps> = ({ products, setProducts, qrCodeU
       } catch (err) {
         console.error('Audio play failed', err);
       }
+    };
+
+    if (pendingOrdersCount > 0) {
+      if (pendingOrdersCount > prevOrdersCountRef.current) {
+        // play immediately for newly received order
+        playChime();
+      }
+      chimeInterval = setInterval(playChime, 4000); // Check every 4 seconds
     }
-    prevOrdersCountRef.current = orders.length;
-  }, [orders.length]);
+    
+    prevOrdersCountRef.current = pendingOrdersCount;
+
+    return () => {
+      if (chimeInterval) clearInterval(chimeInterval);
+    };
+  }, [pendingOrdersCount]);
+
 
   useEffect(() => {
     const interval = setInterval(() => setNow(Date.now()), 60000); // Check every minute
@@ -99,33 +118,54 @@ export const DevPage: React.FC<DevPageProps> = ({ products, setProducts, qrCodeU
   const HOUR_MS = 60 * 60 * 1000;
   const FIFTEEN_MIN_MS = 15 * 60 * 1000;
 
+  useEffect(() => {
+    // Auto-status updates to DB
+    orders.forEach(o => {
+      const age = now - new Date(o.date).getTime();
+      if (o.status === 'pending' && age > FIFTEEN_MIN_MS) {
+        updateOrderStatus(o.id, 'rejected');
+      } else if (o.status === 'accepted' && age > HOUR_MS) {
+        updateOrderStatus(o.id, 'completed');
+      }
+    });
+  }, [now, orders]);
+
   const displayOrders = orders.map(o => {
     const age = now - new Date(o.date).getTime();
-    const isOld = age > HOUR_MS;
-    let computedStatus = o.status;
-    
-    // Cancel forever if pending for > 15 mins
-    if (computedStatus === 'pending' && age > FIFTEEN_MIN_MS) {
-      computedStatus = 'expired' as any;
-    }
-
-    // Auto-complete if > 1 hr and it's active
-    if (isOld && (computedStatus === 'pending' || computedStatus === 'accepted')) {
-      computedStatus = 'completed';
-    }
-    
-    return { ...o, computedStatus, isOld, age };
+    return { ...o, computedStatus: o.status, age };
   });
 
-  const liveOrders = displayOrders.filter(o => o.computedStatus !== 'completed' && o.computedStatus !== 'rejected' && o.computedStatus !== 'expired' && o.computedStatus !== 'rage_blocked');
+  const liveOrders = displayOrders.filter(o => o.computedStatus !== 'completed' && o.computedStatus !== 'rejected' && o.computedStatus !== 'rage_blocked');
+
   const historyOrders = displayOrders.filter(o => {
-    if (o.computedStatus === 'completed' || o.computedStatus === 'rage_blocked') return true;
-    // If rejected or expired and not changed till 15 minutes it gets deleted visually
-    if (o.computedStatus === 'rejected' || o.computedStatus === 'expired') {
-      return o.age <= FIFTEEN_MIN_MS;
-    }
-    return false;
+    return o.computedStatus === 'completed' || o.computedStatus === 'rage_blocked' || o.computedStatus === 'rejected';
   });
+
+  const historyByDate = historyOrders.reduce((acc, order) => {
+    const dateObj = new Date(order.date);
+    const dateStr = dateObj.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+    if (!acc[dateStr]) acc[dateStr] = [];
+    acc[dateStr].push(order);
+    return acc;
+  }, {} as Record<string, typeof historyOrders>);
+
+  const sortedDates = Object.keys(historyByDate).sort((a, b) => new Date(b).getTime() - new Date(a).getTime());
+
+  const toggleExpandAll = () => {
+    if (isAllExpanded) {
+      setIsAllExpanded(false);
+      setExpandedDates({ [new Date().toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })]: true });
+    } else {
+      setIsAllExpanded(true);
+      const allExp: Record<string, boolean> = {};
+      sortedDates.forEach(d => allExp[d] = true);
+      setExpandedDates(allExp);
+    }
+  };
+
+  const toggleDate = (dateStr: string) => {
+    setExpandedDates(prev => ({ ...prev, [dateStr]: !prev[dateStr] }));
+  };
 
   const handleProductChange = (id: string, field: keyof Product, value: any) => {
     const updated = localProducts.map(p => {
@@ -209,7 +249,7 @@ export const DevPage: React.FC<DevPageProps> = ({ products, setProducts, qrCodeU
   };
 
   const handleSavePayment = async () => {
-    setQrCodeUrl(localQr);
+    setUpiId(localQr);
     if (!supabase) return;
     
     const { error } = await supabase.from('payment_config').update({ qr_code_url: localQr }).eq('id', 'config');
@@ -396,19 +436,58 @@ export const DevPage: React.FC<DevPageProps> = ({ products, setProducts, qrCodeU
               {/* History below Live Orders */}
               {historyOrders.length > 0 && (
                 <div className="mt-12">
-                  <h3 className="text-xl font-bold mb-6 text-white/50 border-b border-white/10 pb-2">History</h3>
-                  <div className="flex flex-col gap-4">
-                    {historyOrders.map(order => {
-                      const statusColors: Record<string, string> = {
-                        pending: 'bg-yellow-500/20 text-yellow-300',
-                        accepted: 'bg-blue-500/20 text-blue-300',
-                        completed: 'bg-green-500/20 text-green-300',
-                        rejected: 'bg-red-500/20 text-red-300',
-                        expired: 'bg-red-500/20 text-red-300',
-                        rage_blocked: 'bg-red-500/20 text-red-300'
-                      };
+                  <div className="flex justify-between items-center mb-6 border-b border-white/10 pb-2">
+                    <h3 className="text-xl font-bold text-white/50">History</h3>
+                    <button 
+                      onClick={toggleExpandAll}
+                      className="text-xs font-medium text-white/50 hover:text-white transition flex items-center gap-1"
+                    >
+                      {isAllExpanded ? <Minimize2 size={14} /> : <Maximize2 size={14} />} 
+                      {isAllExpanded ? 'Collapse All' : 'Expand All'}
+                    </button>
+                  </div>
+                  <div className="flex flex-col gap-6">
+                    {sortedDates.map(dateStr => {
+                      const isExpanded = expandedDates[dateStr];
+                      const dateOrders = historyByDate[dateStr];
+                      
                       return (
-                      <div key={order.id} className={`glass-panel p-5 sm:p-6 rounded-3xl border transition-all duration-500 flex flex-col md:flex-row gap-6 justify-between items-start border-white/10 ${order.computedStatus === 'rejected' ? 'grayscale opacity-60' : 'opacity-80'}`}>
+                        <div key={dateStr} className="bg-white/5 rounded-2xl overflow-hidden border border-white/10">
+                          {/* Header Tile */}
+                          <button 
+                            onClick={() => toggleDate(dateStr)}
+                            className="w-full flex justify-between items-center p-4 hover:bg-white/5 transition text-left"
+                          >
+                            <div>
+                                <h4 className="font-bold text-white/90">{dateStr === new Date().toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) ? 'Today' : dateStr}</h4>
+                                <p className="text-xs text-white/50">{dateOrders.length} order{dateOrders.length !== 1 ? 's' : ''}</p>
+                            </div>
+                            <div className="text-white/40">
+                              {isExpanded ? <ChevronUp size={20} /> : <ChevronDown size={20} />}
+                            </div>
+                          </button>
+                          
+                          {/* Expanded Content */}
+                          <AnimatePresence>
+                            {isExpanded && (
+                              <motion.div 
+                                initial={{ height: 0, opacity: 0 }}
+                                animate={{ height: 'auto', opacity: 1 }}
+                                exit={{ height: 0, opacity: 0 }}
+                                className="border-t border-white/10"
+                              >
+                                <div className="p-4 flex flex-col gap-4 bg-black/20">
+                                  {dateOrders.map(order => {
+                                      const statusColors: Record<string, string> = {
+                                        pending: 'bg-yellow-500/20 text-yellow-300',
+                                        accepted: 'bg-blue-500/20 text-blue-300',
+                                        completed: 'bg-green-500/20 text-green-300',
+                                        rejected: 'bg-red-500/20 text-red-300',
+                                        expired: 'bg-red-500/20 text-red-300',
+                                        rage_blocked: 'bg-red-500/20 text-red-300'
+                                      };
+                                      return (
+                                        <div key={order.id} className={`glass-panel p-5 sm:p-6 rounded-3xl border transition-all duration-500 flex flex-col md:flex-row gap-6 justify-between items-start border-white/10 ${order.computedStatus === 'rejected' ? 'grayscale opacity-60' : 'opacity-80'}`}>
                         <div className="flex-1 space-y-4 w-full">
                           <div className="flex justify-between items-start border-b border-white/10 pb-4">
                             <div>
@@ -417,9 +496,20 @@ export const DevPage: React.FC<DevPageProps> = ({ products, setProducts, qrCodeU
                               </h3>
                               <p className="text-sm text-white/50">{new Date(order.date).toLocaleString()}</p>
                             </div>
-                            <span className={`glass-pill px-3 py-1 text-xs font-semibold uppercase tracking-wider ${/*ts-ignore*/statusColors[order.computedStatus]}`}>
-                              {order.computedStatus}
-                            </span>
+                            <div className="flex items-center gap-3">
+                              <span className={`glass-pill px-3 py-1 text-xs font-semibold uppercase tracking-wider ${/*ts-ignore*/statusColors[order.computedStatus]}`}>
+                                {order.computedStatus}
+                              </span>
+                              {order.computedStatus === 'rejected' && (
+                                <button 
+                                  onClick={() => deleteOrder(order.id)}
+                                  className="text-white/30 hover:text-white transition-colors"
+                                  title="Dismiss / Delete Order"
+                                >
+                                  <X size={18} />
+                                </button>
+                              )}
+                            </div>
                           </div>
                           
                           <div className="grid grid-cols-2 gap-4">
@@ -505,7 +595,15 @@ export const DevPage: React.FC<DevPageProps> = ({ products, setProducts, qrCodeU
                           )}
                         </div>
                       </div>
-                    )})}
+                                      );
+                                  })}
+                                </div>
+                              </motion.div>
+                            )}
+                          </AnimatePresence>
+                        </div>
+                      )
+                    })}
                   </div>
                 </div>
               )}
@@ -619,24 +717,19 @@ export const DevPage: React.FC<DevPageProps> = ({ products, setProducts, qrCodeU
 
               <h2 className="text-2xl font-semibold mb-6">Payment Configuration</h2>
               <div className="mb-6">
-                <label className="block text-sm text-white/70 mb-2 ml-2">UPI QR Code Image URL</label>
+                <label className="block text-sm text-white/70 mb-2 ml-2">Your UPI ID</label>
                 <input 
                   type="text" 
                   value={localQr}
                   onChange={(e) => setLocalQr(e.target.value)}
                   className="glass-input w-full p-4 rounded-2xl bg-black/40"
-                  placeholder="https://..."
+                  placeholder="e.g. nhempire1717-3@oksbi"
                 />
               </div>
               
               <div className="mb-8 p-4 rounded-2xl bg-white/5 border border-white/10 flex flex-col sm:flex-row gap-6 items-center">
-                {localQr ? (
-                  <img src={localQr} alt="QR Preview" className="w-32 h-32 rounded-xl object-cover bg-white" />
-                ) : (
-                  <div className="w-32 h-32 rounded-xl bg-black/40 flex items-center justify-center text-white/30 text-xs text-center border border-dashed border-white/20">No QR Code Image</div>
-                )}
                 <div className="flex-1 text-sm text-white/60">
-                  <p>This is the QR code that will be displayed to customers when they check out. Make sure it points to a valid UPI QR so you receive payments directly.</p>
+                  <p>Your UPI ID will be used to generate a dynamic UPI QR Code on the checkout screen with the exact exact amount required.</p>
                 </div>
               </div>
 

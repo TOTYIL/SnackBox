@@ -17,12 +17,11 @@ export const ProductCard: React.FC<ProductCardProps> = React.memo(({ product, ca
       animate={{ opacity: 1, y: 0 }}
       className={`glass-panel rounded-3xl p-4 flex flex-col group h-full transition-all ${product.stock === 0 ? 'grayscale opacity-60' : ''}`}
     >
-      <div className="relative w-full h-40 xl:h-48 rounded-2xl overflow-hidden mb-4">
+      <div className="relative w-full h-40 xl:h-48 rounded-2xl overflow-hidden mb-4 bg-white/5">
         <div className="absolute inset-0 bg-black/10 group-hover:bg-transparent transition-colors z-10" />
         <img 
           src={product.image} 
           alt={product.name}
-          loading="lazy"
           className="w-full h-full object-cover transform group-hover:scale-110 transition-transform duration-500"
         />
         <div className="absolute top-2 left-2 z-20">
