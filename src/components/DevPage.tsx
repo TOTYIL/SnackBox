@@ -27,13 +27,18 @@ export const DevPage: React.FC<DevPageProps> = ({ products, setProducts, qrCodeU
     setLocalProducts(prev => {
        if (!editingItemId) return [...products];
        
-       return products.map(prod => {
-          if (prod.id === editingItemId) {
-             const localProd = prev.find(p => p.id === editingItemId);
-             return localProd || prod;
-          }
-          return prod;
+       let updated = prev.map(p => {
+          if (p.id === editingItemId) return p;
+          const remote = products.find(rp => rp.id === p.id);
+          return remote || p;
        });
+       
+       const newProducts = products.filter(p => !updated.find(up => up.id === p.id));
+       updated.push(...newProducts);
+       
+       updated = updated.filter(p => p.id === editingItemId || products.find(rp => rp.id === p.id));
+       
+       return updated;
     });
   }, [products, editingItemId]);
 

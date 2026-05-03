@@ -575,7 +575,7 @@ export default function App() {
             </div>
             <div className="w-1 h-1 rounded-full bg-white/20" />
             <div className="text-white/40">
-              v1.2.00
+              v1.2.02
             </div>
           </div>
         </div>
