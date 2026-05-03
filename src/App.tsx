@@ -256,7 +256,7 @@ export default function App() {
     setCartItems(prev => {
       const existing = prev.find(item => item.id === product.id);
       if (existing) {
-        return prev.map(item => item.id === product.id ? { ...item, quantity: item.quantity + 1 } : item);
+        return prev.map(item => item.id === product.id ? { ...item, quantity: Math.min(item.quantity + 1, product.stock) } : item);
       }
       return [...prev, { ...product, quantity: 1 }];
     });
@@ -265,7 +265,8 @@ export default function App() {
   const updateQuantity = React.useCallback((id: string, delta: number) => {
     setCartItems(prev => prev.map(item => {
       if (item.id === id) {
-        const newQ = item.quantity + delta;
+        let newQ = item.quantity + delta;
+        if (newQ > item.stock) newQ = item.stock;
         return newQ > 0 ? { ...item, quantity: newQ } : null;
       }
       return item;
@@ -343,45 +344,57 @@ export default function App() {
     }
   };
 
+  const processingOrdersRef = React.useRef<Set<string>>(new Set());
+
   const updateOrderStatus = async (orderId: string, status: Order['status']) => {
+    if (processingOrdersRef.current.has(orderId)) return;
+    
     const orderToUpdate = orders.find(o => o.id === orderId);
     if (!orderToUpdate) return;
     
     const oldStatus = orderToUpdate.status;
-    setOrders(prev => prev.map(o => o.id === orderId ? { ...o, status } : o));
+    if (oldStatus === status) return;
+
+    processingOrdersRef.current.add(orderId);
     
-    // Handle stock changes
-    const doUpdateStock = async (changes: {id: string, delta: number}[]) => {
-      setProductsList(prev => prev.map(p => {
-        const change = changes.find(c => c.id === p.id);
-        if(change) return { ...p, stock: Math.max(0, p.stock + change.delta) };
-        return p;
-      }));
+    try {
+      setOrders(prev => prev.map(o => o.id === orderId ? { ...o, status } : o));
+      
+      // Sync to Supabase immediately
       if (supabase) {
-        for(const change of changes) {
-            const { data } = await supabase.from('products').select('stock').eq('id', change.id).single();
-            if (data && data.stock !== undefined) {
-              await supabase.from('products').update({ stock: Math.max(0, data.stock + change.delta) }).eq('id', change.id);
-            }
-        }
+        await supabase.from('orders').update({ status }).eq('id', orderId);
       }
-    };
 
-    const stockIsDeducted = (s: Order['status']) => s === 'accepted' || s === 'completed';
-    const oldDeducted = stockIsDeducted(oldStatus);
-    const newDeducted = stockIsDeducted(status);
+      // Handle stock changes
+      const doUpdateStock = async (changes: {id: string, delta: number}[]) => {
+        setProductsList(prev => prev.map(p => {
+          const change = changes.find(c => c.id === p.id);
+          if(change) return { ...p, stock: Math.max(0, p.stock + change.delta) };
+          return p;
+        }));
+        if (supabase) {
+          for(const change of changes) {
+              const { data } = await supabase.from('products').select('stock').eq('id', change.id).single();
+              if (data && data.stock !== undefined) {
+                await supabase.from('products').update({ stock: Math.max(0, data.stock + change.delta) }).eq('id', change.id);
+              }
+          }
+        }
+      };
 
-    if (!oldDeducted && newDeducted) {
-      // Transitioned to Accepted/Completed: Deduct Stock
-      await doUpdateStock(orderToUpdate.items.map(item => ({ id: item.id, delta: -item.quantity })));
-    } else if (oldDeducted && !newDeducted) {
-      // Transitioned to Pending/Rejected: Restore Stock
-      await doUpdateStock(orderToUpdate.items.map(item => ({ id: item.id, delta: item.quantity })));
-    }
+      const stockIsDeducted = (s: Order['status']) => s === 'accepted' || s === 'completed';
+      const oldDeducted = stockIsDeducted(oldStatus);
+      const newDeducted = stockIsDeducted(status);
 
-    // Sync to Supabase
-    if (supabase) {
-      await supabase.from('orders').update({ status }).eq('id', orderId);
+      if (!oldDeducted && newDeducted) {
+        // Transitioned to Accepted/Completed: Deduct Stock
+        await doUpdateStock(orderToUpdate.items.map(item => ({ id: item.id, delta: -item.quantity })));
+      } else if (oldDeducted && !newDeducted) {
+        // Transitioned to Pending/Rejected: Restore Stock
+        await doUpdateStock(orderToUpdate.items.map(item => ({ id: item.id, delta: item.quantity })));
+      }
+    } finally {
+      processingOrdersRef.current.delete(orderId);
     }
   };
 
@@ -575,7 +588,7 @@ export default function App() {
             </div>
             <div className="w-1 h-1 rounded-full bg-white/20" />
             <div className="text-white/40">
-              v1.2.02
+              v1.2.03
             </div>
           </div>
         </div>

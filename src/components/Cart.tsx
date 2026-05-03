@@ -68,7 +68,7 @@ export const Cart: React.FC<CartProps> = ({ isOpen, onClose, items, updateQuanti
                         <Minus size={14} />
                       </button>
                       <span className="w-4 text-center font-medium">{item.quantity}</span>
-                      <button onClick={() => updateQuantity(item.id, 1)} className="p-1 hover:text-green-400 transition-colors">
+                      <button onClick={() => updateQuantity(item.id, 1)} disabled={item.quantity >= item.stock} className="p-1 hover:text-green-400 transition-colors disabled:opacity-50 disabled:hover:text-white disabled:cursor-not-allowed">
                         <Plus size={14} />
                       </button>
                     </div>
