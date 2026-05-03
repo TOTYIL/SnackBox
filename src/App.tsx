@@ -43,24 +43,80 @@ export default function App() {
   const [cartItems, setCartItems] = useState<CartItem[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
 
-  const fetchProducts = async () => {
+  const fetchProducts = React.useCallback(async () => {
     if (!supabase) return;
     const { data: dbProducts, error: pErr } = await supabase.from('products').select('*').order('created_at', { ascending: true });
     if (dbProducts && dbProducts.length > 0) {
-      setProductsList(dbProducts.filter(d => Number(d.stock) >= 0).map(d => ({
+      const newProducts = dbProducts.filter(d => Number(d.stock) >= 0).map(d => ({
         id: d.id, name: d.name, description: d.description, price: Number(d.price), 
         category: d.category, image: d.image, inStock: d.in_stock, stock: Number(d.stock)
-      })));
+      }));
+      setProductsList(prev => {
+        if (JSON.stringify(prev) === JSON.stringify(newProducts)) return prev;
+        return newProducts;
+      });
     } else {
       // Init data
-      setProductsList(initialProducts);
+      setProductsList(prev => {
+        if (JSON.stringify(prev) === JSON.stringify(initialProducts)) return prev;
+        return initialProducts;
+      });
       const { error: insertErr } = await supabase.from('products').insert(initialProducts.map(p => ({
         id: p.id, name: p.name, description: p.description, price: p.price, 
         category: p.category, image: p.image, in_stock: p.inStock, stock: p.stock
       })));
       if(insertErr) console.error('Error inserting initial products', insertErr);
     }
-  };
+  }, []);
+
+  const fetchOrders = React.useCallback(async () => {
+    if (!supabase) return;
+    const { data: dbOrders } = await supabase.from('orders').select(`
+      *,
+      order_items (*)
+    `).order('date', { ascending: false });
+    
+    if (dbOrders) {
+      const newOrders = dbOrders.map(o => {
+        let actualRoom = o.room;
+        let paymentMethod: 'cod' | 'prepaid' | undefined = undefined;
+        // Try to read from payment_method column if it exists!
+        if (o.payment_method) {
+           paymentMethod = o.payment_method;
+        } else if (typeof o.room === 'string' && o.room.includes('||')) {
+          const parts = o.room.split('||');
+          actualRoom = parts[0];
+          paymentMethod = parts[1] as 'cod' | 'prepaid';
+        }
+        
+        // Default to cod if missing
+        if (!paymentMethod) {
+          paymentMethod = 'cod';
+        }
+
+        return {
+          id: o.id,
+          customerName: o.customer_name,
+          phone: o.phone,
+          room: actualRoom,
+          paymentMethod,
+          date: o.date,
+          total: Number(o.total),
+          status: o.status as Order['status'],
+          items: o.order_items.map((oi: any) => ({
+            id: oi.product_id,
+            name: oi.name,
+            price: Number(oi.price),
+            quantity: oi.quantity
+          }))
+        };
+      });
+      setOrders(prev => {
+        if (JSON.stringify(prev) === JSON.stringify(newOrders)) return prev;
+        return newOrders;
+      });
+    }
+  }, []);
 
   // Fetch Data on mount
   useEffect(() => {
@@ -96,8 +152,18 @@ export default function App() {
     loadData();
 
     // Fallback polling for robust updates
-    const interval = setInterval(() => {
+    const interval = setInterval(async () => {
       fetchOrders();
+      fetchProducts();
+      
+      if (supabase) {
+        // Poll Site Status and Config just in case real-time isn't enabled
+        const { data: statusData } = await supabase.from('payment_config').select('qr_code_url').eq('id', 'site_status').single();
+        if (statusData) setSiteStatus(statusData.qr_code_url === 'offline' ? 'offline' : 'live');
+        
+        const { data: qData } = await supabase.from('payment_config').select('qr_code_url').eq('id', 'config').single();
+        if (qData) setQrCodeUrl(qData.qr_code_url);
+      }
     }, 5000);
 
     // Listen to real-time changes
@@ -139,52 +205,9 @@ export default function App() {
       if (configChannel) supabase.removeChannel(configChannel);
       if (productsChannel) supabase.removeChannel(productsChannel);
     };
-  }, []);
+  }, [fetchOrders, fetchProducts]);
 
-  const fetchOrders = async () => {
-    if (!supabase) return;
-    const { data: dbOrders } = await supabase.from('orders').select(`
-      *,
-      order_items (*)
-    `).order('date', { ascending: false });
-    
-    if (dbOrders) {
-      setOrders(dbOrders.map(o => {
-        let actualRoom = o.room;
-        let paymentMethod: 'cod' | 'prepaid' | undefined = undefined;
-        // Try to read from payment_method column if it exists!
-        if (o.payment_method) {
-           paymentMethod = o.payment_method;
-        } else if (typeof o.room === 'string' && o.room.includes('||')) {
-          const parts = o.room.split('||');
-          actualRoom = parts[0];
-          paymentMethod = parts[1] as 'cod' | 'prepaid';
-        }
-        
-        // Default to cod if missing
-        if (!paymentMethod) {
-          paymentMethod = 'cod';
-        }
 
-        return {
-          id: o.id,
-          customerName: o.customer_name,
-          phone: o.phone,
-          room: actualRoom,
-          paymentMethod,
-          date: o.date,
-          total: Number(o.total),
-          status: o.status as Order['status'],
-          items: o.order_items.map((oi: any) => ({
-            id: oi.product_id,
-            name: oi.name,
-            price: Number(oi.price),
-            quantity: oi.quantity
-          }))
-        };
-      }));
-    }
-  };
 
   // Intercept special search query
   useEffect(() => {
@@ -327,13 +350,8 @@ export default function App() {
     const oldStatus = orderToUpdate.status;
     setOrders(prev => prev.map(o => o.id === orderId ? { ...o, status } : o));
     
-    // Sync to Supabase
-    if (supabase) {
-      await supabase.from('orders').update({ status }).eq('id', orderId);
-    }
-
     // Handle stock changes
-    const doUpdateStock = async (changes: {id: string, delta: number}[]) => {
+    const doUpdateStock = (changes: {id: string, delta: number}[]) => {
       setProductsList(prev => prev.map(p => {
         const change = changes.find(c => c.id === p.id);
         if(change) return { ...p, stock: Math.max(0, p.stock + change.delta) };
@@ -343,7 +361,7 @@ export default function App() {
         for(const change of changes) {
             const p = productsList.find(pr => pr.id === change.id);
             if (p) {
-              await supabase.from('products').update({ stock: Math.max(0, p.stock + change.delta) }).eq('id', change.id);
+              supabase.from('products').update({ stock: Math.max(0, p.stock + change.delta) }).eq('id', change.id);
             }
         }
       }
@@ -360,6 +378,11 @@ export default function App() {
       // Transitioned to Pending/Rejected: Restore Stock
       doUpdateStock(orderToUpdate.items.map(item => ({ id: item.id, delta: item.quantity })));
     }
+
+    // Sync to Supabase
+    if (supabase) {
+      await supabase.from('orders').update({ status }).eq('id', orderId);
+    }
   };
 
   const cartTotalItems = cartItems.reduce((acc, item) => acc + item.quantity, 0);
@@ -368,8 +391,7 @@ export default function App() {
   const trackedOrders = useMemo(() => {
     return orders.filter(o => {
       if (!sessionOrderIds.includes(o.id)) return false;
-      if (o.status === 'rejected') return false; 
-      if (o.status === 'completed') {
+      if (o.status === 'completed' || o.status === 'rejected' || o.status === 'rage_blocked') {
           const orderTime = new Date(o.date).getTime();
           if (Date.now() - orderTime > 30 * 60 * 1000) return false;
       }
@@ -547,9 +569,13 @@ export default function App() {
               <button onClick={() => setActivePage('terms')} className="hover:text-white transition">Terms of Service</button>
               <button onClick={() => setActivePage('privacy')} className="hover:text-white transition">Privacy Policy</button>
             </div>
-            <div className="w-1 h-1 rounded-full bg-white/20" />
+            <div className="w-1 h-1 rounded-full bg-white/20 hidden sm:block" />
             <div className="hidden sm:block">
               &copy; {new Date().getFullYear()} SnackBox Inc.
+            </div>
+            <div className="w-1 h-1 rounded-full bg-white/20" />
+            <div className="text-white/40">
+              v1.2.00
             </div>
           </div>
         </div>

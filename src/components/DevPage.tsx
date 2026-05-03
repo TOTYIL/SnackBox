@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Product, Order } from '../data';
 import { Save, Plus, ArrowLeft, PackageSearch, CreditCard, ClipboardList, Edit2, Trash2, Check, X, RotateCcw, Power } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
@@ -21,10 +21,14 @@ export const DevPage: React.FC<DevPageProps> = ({ products, setProducts, qrCodeU
   const [localProducts, setLocalProducts] = useState([...products]);
   const [localQr, setLocalQr] = useState(qrCodeUrl);
   const [activeTab, setActiveTab] = useState<'orders' | 'inventory' | 'payment'>('orders');
+  const [editingItemId, setEditingItemId] = useState<string | null>(null);
 
   useEffect(() => {
-    setLocalProducts([...products]);
-  }, [products]);
+    setLocalProducts(prev => {
+       if (editingItemId) return prev; // Do not overwrite if we are currently editing
+       return [...products];
+    });
+  }, [products, editingItemId]);
 
   useEffect(() => {
     setLocalQr(qrCodeUrl);
@@ -35,6 +39,45 @@ export const DevPage: React.FC<DevPageProps> = ({ products, setProducts, qrCodeU
   const [now, setNow] = useState(Date.now());
   const [rageTaps, setRageTaps] = useState<{ [orderId: string]: number }>({});
   const [deleteTaps, setDeleteTaps] = useState<{ [orderId: string]: number }>({});
+  
+  // Previous orders reference for notification
+  const prevOrdersCountRef = useRef(orders.length);
+
+  useEffect(() => {
+    if (orders.length > prevOrdersCountRef.current) {
+      // New order came in, play chime
+      try {
+        const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+        if (AudioContextClass) {
+          const ctx = new AudioContextClass();
+          const playNote = (freq: number, startTime: number, duration: number) => {
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+            osc.type = 'sine';
+            osc.frequency.value = freq;
+            
+            gain.gain.setValueAtTime(0, startTime);
+            gain.gain.linearRampToValueAtTime(0.3, startTime + 0.05);
+            gain.gain.exponentialRampToValueAtTime(0.01, startTime + duration);
+            
+            osc.start(startTime);
+            osc.stop(startTime + duration);
+          };
+
+          const t = ctx.currentTime;
+          playNote(523.25, t, 0.4);      // C5
+          playNote(659.25, t + 0.1, 0.4); // E5
+          playNote(783.99, t + 0.2, 0.6); // G5
+        }
+      } catch (err) {
+        console.error('Audio play failed', err);
+      }
+    }
+    prevOrdersCountRef.current = orders.length;
+  }, [orders.length]);
+
   useEffect(() => {
     const interval = setInterval(() => setNow(Date.now()), 60000); // Check every minute
     return () => clearInterval(interval);
@@ -72,11 +115,8 @@ export const DevPage: React.FC<DevPageProps> = ({ products, setProducts, qrCodeU
     return false;
   });
 
-  // Edit mode for inventory item
-  const [editingItemId, setEditingItemId] = useState<string | null>(null);
-
   const handleProductChange = (id: string, field: keyof Product, value: any) => {
-    setLocalProducts(prev => prev.map(p => {
+    const updated = localProducts.map(p => {
       if (p.id === id) {
         return { 
           ...p, 
@@ -84,7 +124,9 @@ export const DevPage: React.FC<DevPageProps> = ({ products, setProducts, qrCodeU
         };
       }
       return p;
-    }));
+    });
+    setLocalProducts(updated);
+    setProducts(updated);
   };
 
   const handleAddProduct = () => {
