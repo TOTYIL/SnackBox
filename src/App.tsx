@@ -351,7 +351,7 @@ export default function App() {
     setOrders(prev => prev.map(o => o.id === orderId ? { ...o, status } : o));
     
     // Handle stock changes
-    const doUpdateStock = (changes: {id: string, delta: number}[]) => {
+    const doUpdateStock = async (changes: {id: string, delta: number}[]) => {
       setProductsList(prev => prev.map(p => {
         const change = changes.find(c => c.id === p.id);
         if(change) return { ...p, stock: Math.max(0, p.stock + change.delta) };
@@ -359,9 +359,9 @@ export default function App() {
       }));
       if (supabase) {
         for(const change of changes) {
-            const p = productsList.find(pr => pr.id === change.id);
-            if (p) {
-              supabase.from('products').update({ stock: Math.max(0, p.stock + change.delta) }).eq('id', change.id);
+            const { data } = await supabase.from('products').select('stock').eq('id', change.id).single();
+            if (data && data.stock !== undefined) {
+              await supabase.from('products').update({ stock: Math.max(0, data.stock + change.delta) }).eq('id', change.id);
             }
         }
       }
@@ -373,10 +373,10 @@ export default function App() {
 
     if (!oldDeducted && newDeducted) {
       // Transitioned to Accepted/Completed: Deduct Stock
-      doUpdateStock(orderToUpdate.items.map(item => ({ id: item.id, delta: -item.quantity })));
+      await doUpdateStock(orderToUpdate.items.map(item => ({ id: item.id, delta: -item.quantity })));
     } else if (oldDeducted && !newDeducted) {
       // Transitioned to Pending/Rejected: Restore Stock
-      doUpdateStock(orderToUpdate.items.map(item => ({ id: item.id, delta: item.quantity })));
+      await doUpdateStock(orderToUpdate.items.map(item => ({ id: item.id, delta: item.quantity })));
     }
 
     // Sync to Supabase

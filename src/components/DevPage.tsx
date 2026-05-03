@@ -25,8 +25,15 @@ export const DevPage: React.FC<DevPageProps> = ({ products, setProducts, qrCodeU
 
   useEffect(() => {
     setLocalProducts(prev => {
-       if (editingItemId) return prev; // Do not overwrite if we are currently editing
-       return [...products];
+       if (!editingItemId) return [...products];
+       
+       return products.map(prod => {
+          if (prod.id === editingItemId) {
+             const localProd = prev.find(p => p.id === editingItemId);
+             return localProd || prod;
+          }
+          return prod;
+       });
     });
   }, [products, editingItemId]);
 
@@ -127,6 +134,24 @@ export const DevPage: React.FC<DevPageProps> = ({ products, setProducts, qrCodeU
     });
     setLocalProducts(updated);
     setProducts(updated);
+  };
+
+  const handleSaveSingleProduct = async (id: string) => {
+    setEditingItemId(null);
+    if (!supabase) return;
+    const p = localProducts.find(prod => prod.id === id);
+    if (p) {
+        await supabase.from('products').upsert({
+          id: p.id,
+          name: p.name,
+          description: p.description,
+          price: p.price,
+          category: p.category,
+          image: p.image,
+          in_stock: p.inStock,
+          stock: p.stock
+        });
+    }
   };
 
   const handleAddProduct = () => {
@@ -528,7 +553,7 @@ export const DevPage: React.FC<DevPageProps> = ({ products, setProducts, qrCodeU
                                <button onClick={() => handleRemoveProduct(product.id)} className="text-red-400 hover:bg-red-500/20 text-sm bg-red-500/10 px-3 py-1 rounded-lg flex items-center gap-1 transition">
                                    <Trash2 size={14}/> Remove
                                </button>
-                               <button onClick={() => setEditingItemId(null)} className="text-white/50 hover:text-white text-sm bg-white/5 px-3 py-1 rounded-lg">Done</button>
+                               <button onClick={() => handleSaveSingleProduct(product.id)} className="text-white/50 hover:text-white text-sm bg-white/5 px-3 py-1 rounded-lg">Done</button>
                            </div>
                         </div>
                         <div>
