@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { X, CheckCircle, ArrowRight, Banknote, QrCode } from 'lucide-react';
+import { X, CheckCircle, ArrowRight, Banknote, QrCode, Smartphone } from 'lucide-react';
 import QRCode from "react-qr-code";
 
 interface CheckoutModalProps {
@@ -13,11 +13,12 @@ interface CheckoutModalProps {
 }
 
 export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose, total, cartTotalItems, upiId, onComplete }) => {
-  const [step, setStep] = useState<'details' | 'method' | 'payment_online' | 'success'>('details');
+  const [step, setStep] = useState<'details' | 'method' | 'payment_online_choice' | 'payment_qr' | 'payment_app' | 'success'>('details');
   const [paymentCode, setPaymentCode] = useState('');
   
   const discountAmount = Math.min(0.5, cartTotalItems * 0.1);
   const prepaidTotal = total - discountAmount;
+  const upiLink = `upi://pay?pa=${encodeURIComponent(upiId.trim())}&pn=${encodeURIComponent('SnackBox')}&tn=${encodeURIComponent(`Order Code: ${paymentCode}`)}&am=${prepaidTotal.toFixed(2)}&cu=INR`;
 
   
   // Form State
@@ -103,7 +104,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose, t
                       pattern="^[A-Za-z\s]{3,}$"
                       title="Name must be at least 3 alphabets long"
                       className="glass-input w-full p-4 rounded-2xl" 
-                      placeholder="John Doe"
+                      placeholder="Your Name"
                     />
                   </div>
                   <div>
@@ -162,7 +163,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose, t
                 
                 <div className="space-y-4">
                   <button 
-                    onClick={() => setStep('payment_online')}
+                    onClick={() => setStep('payment_online_choice')}
                     className="w-full bg-white/10 hover:bg-white/20 border border-white/10 rounded-2xl p-6 flex flex-col items-center justify-center gap-3 transition-colors group"
                   >
                     <div className="w-12 h-12 rounded-full bg-indigo-500/20 text-indigo-400 flex items-center justify-center group-hover:scale-110 transition-transform">
@@ -191,15 +192,58 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose, t
               </motion.div>
             )}
 
-            {step === 'payment_online' && (
+            {step === 'payment_online_choice' && (
               <motion.div
-                key="payment_online"
+                key="payment_online_choice"
+                initial={{ opacity: 0, x: -20 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: 20 }}
+              >
+                <button onClick={() => setStep('method')} className="text-white/50 text-sm hover:text-white mb-4 block">← Back to Options</button>
+                <h2 className="text-2xl font-bold mb-2">Online Payment</h2>
+                <p className="text-white/60 mb-6 text-sm">Choose how you want to pay online.</p>
+                
+                <div className="space-y-4">
+                  <a 
+                    href={upiLink}
+                    target="_top"
+                    onClick={() => setStep('payment_app')}
+                    className="w-full bg-white/10 hover:bg-white/20 border border-white/10 rounded-2xl p-4 flex items-center justify-start gap-4 transition-colors group cursor-pointer"
+                  >
+                    <div className="w-12 h-12 rounded-full bg-pink-500/20 text-pink-400 flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform">
+                      <Smartphone size={24} />
+                    </div>
+                    <div className="text-left flex-1">
+                      <h3 className="font-bold text-lg mb-1">Pay via UPI App</h3>
+                      <p className="text-sm text-white/50">Google Pay, PhonePe, Paytm, etc.</p>
+                    </div>
+                  </a>
+
+                  <button 
+                    onClick={() => setStep('payment_qr')}
+                    className="w-full bg-white/10 hover:bg-white/20 border border-white/10 rounded-2xl p-4 flex items-center justify-start gap-4 transition-colors group"
+                  >
+                    <div className="w-12 h-12 rounded-full bg-blue-500/20 text-blue-400 flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform">
+                      <QrCode size={24} />
+                    </div>
+                    <div className="text-left flex-1">
+                      <h3 className="font-bold text-lg mb-1">Scan QR Code</h3>
+                      <p className="text-sm text-white/50">Display QR code to scan from another device</p>
+                    </div>
+                  </button>
+                </div>
+              </motion.div>
+            )}
+
+            {step === 'payment_qr' && (
+              <motion.div
+                key="payment_qr"
                 initial={{ opacity: 0, x: -20 }}
                 animate={{ opacity: 1, x: 0 }}
                 exit={{ opacity: 0, x: 20 }}
                 className="text-center"
               >
-                <button onClick={() => setStep('method')} className="text-white/50 text-sm hover:text-white mb-2 ml-auto">← Back</button>
+                <button onClick={() => setStep('payment_online_choice')} className="text-white/50 text-sm hover:text-white mb-2 ml-auto">← Back</button>
                 <h2 className="text-2xl font-bold mb-2">Complete Payment</h2>
                 <p className="text-white/60 mb-6 text-sm px-4">
                   Scan the QR code below with any UPI app to pay <b className="text-white">₹{prepaidTotal.toFixed(2)}</b>
@@ -213,7 +257,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose, t
                      <QRCode
                         size={256}
                         style={{ height: "auto", maxWidth: "100%", width: "100%" }}
-                        value={`upi://pay?pa=${encodeURIComponent(upiId.trim())}&pn=${encodeURIComponent('SnackBox')}&tn=${encodeURIComponent(`Order Code: ${paymentCode}`)}&am=${prepaidTotal.toFixed(2)}&cu=INR`}
+                        value={upiLink}
                         viewBox={`0 0 256 256`}
                       />
                   ) : (
@@ -226,6 +270,45 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({ isOpen, onClose, t
                   <div className="text-xl font-mono font-bold tracking-[0.2em] text-pink-300">
                     {paymentCode}
                   </div>
+                </div>
+
+                <button 
+                  onClick={() => handleFinish('prepaid')}
+                  className="w-full bg-gradient-to-r from-pink-500 to-indigo-500 text-white font-semibold rounded-full p-4 flex items-center justify-center gap-2 hover:opacity-90 transition shadow-[0_0_20px_rgba(236,72,153,0.3)]"
+                >
+                  <CheckCircle size={18} /> I have paid
+                </button>
+              </motion.div>
+            )}
+
+            {step === 'payment_app' && (
+              <motion.div
+                key="payment_app"
+                initial={{ opacity: 0, x: -20 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: 20 }}
+                className="text-center"
+              >
+                <button onClick={() => setStep('payment_online_choice')} className="text-white/50 text-sm hover:text-white mb-2 ml-auto">← Back</button>
+                <h2 className="text-2xl font-bold mb-2">Complete Payment</h2>
+                <p className="text-white/60 mb-6 text-sm px-4">
+                  Please complete the payment of <b className="text-white">₹{prepaidTotal.toFixed(2)}</b> in your UPI app.
+                  {discountAmount > 0 && (
+                    <span className="block text-green-400 mt-1">Includes ₹{discountAmount.toFixed(2)} prepaid discount!</span>
+                  )}
+                </p>
+
+                <div className="bg-white/5 border border-white/10 p-6 rounded-3xl mx-auto mb-6 flex items-center justify-center flex-col gap-4">
+                  <div className="w-16 h-16 rounded-full bg-pink-500/20 text-pink-400 flex items-center justify-center animate-pulse">
+                    <Smartphone size={32} />
+                  </div>
+                  <p className="text-white/80 font-medium">Waiting for you to complete the payment...</p>
+                </div>
+
+                <div className="mb-6 mt-2">
+                  <a href={upiLink} target="_top" className="text-xs text-white/40 hover:text-white/60 underline transition-colors">
+                    Try opening payment app manually
+                  </a>
                 </div>
 
                 <button 

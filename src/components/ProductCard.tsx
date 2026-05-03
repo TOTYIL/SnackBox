@@ -11,6 +11,7 @@ interface ProductCardProps {
 }
 
 export const ProductCard: React.FC<ProductCardProps> = React.memo(({ product, cartQuantity, onAdd, onUpdate }) => {
+  const [imgLoaded, setImgLoaded] = React.useState(false);
   return (
     <motion.div 
       initial={{ opacity: 0, y: 20 }}
@@ -22,7 +23,9 @@ export const ProductCard: React.FC<ProductCardProps> = React.memo(({ product, ca
         <img 
           src={product.image} 
           alt={product.name}
-          className="w-full h-full object-cover transform group-hover:scale-110 transition-transform duration-500"
+          decoding="async"
+          onLoad={() => setImgLoaded(true)}
+          className={`w-full h-full object-cover transform group-hover:scale-110 transition-all duration-700 ${imgLoaded ? 'opacity-100' : 'opacity-0 scale-95'}`}
         />
         <div className="absolute top-2 left-2 z-20">
           <span className={`glass-pill px-3 py-1 text-xs font-semibold glass-backdrop-md ${product.stock < 10 ? 'bg-red-500/80 text-white' : 'bg-black/50 text-white'}`}>

@@ -77,7 +77,8 @@ export default function App() {
     `).order('date', { ascending: false });
     
     if (dbOrders) {
-      const newOrders = dbOrders.map(o => {
+      const hidden = JSON.parse(localStorage.getItem('admin_hidden_orders') || '[]');
+      const newOrders = dbOrders.filter(dbO => !hidden.includes(dbO.id)).map(o => {
         let actualRoom = o.room;
         let paymentMethod: 'cod' | 'prepaid' | undefined = undefined;
         // Try to read from payment_method column if it exists!
@@ -94,6 +95,12 @@ export default function App() {
           paymentMethod = 'cod';
         }
 
+        const recent = recentlyUpdatedOrdersRef.current[o.id];
+        let statusToUse = o.status as Order['status'];
+        if (recent && (Date.now() - recent.timestamp < 10000)) {
+           statusToUse = recent.status as Order['status'];
+        }
+
         return {
           id: o.id,
           customerName: o.customer_name,
@@ -102,7 +109,7 @@ export default function App() {
           paymentMethod,
           date: o.date,
           total: Number(o.total),
-          status: o.status as Order['status'],
+          status: statusToUse,
           items: o.order_items.map((oi: any) => ({
             id: oi.product_id,
             name: oi.name,
@@ -182,10 +189,11 @@ export default function App() {
         .channel('public:payment_config')
         .on('postgres_changes', { event: '*', schema: 'public', table: 'payment_config' }, payload => {
           if (payload.new) {
-             if (payload.new.id === 'site_status') {
-               setSiteStatus(payload.new.qr_code_url === 'offline' ? 'offline' : 'live');
-             } else if (payload.new.id === 'config') {
-               setUpiId(payload.new.qr_code_url);
+             const newData = payload.new as any;
+             if (newData.id === 'site_status') {
+               setSiteStatus(newData.qr_code_url === 'offline' ? 'offline' : 'live');
+             } else if (newData.id === 'config') {
+               setUpiId(newData.qr_code_url);
              }
           }
         })
@@ -346,6 +354,15 @@ export default function App() {
 
   const deleteOrder = async (orderId: string) => {
     setOrders(prev => prev.filter(o => o.id !== orderId));
+    
+    try {
+      const hidden = JSON.parse(localStorage.getItem('admin_hidden_orders') || '[]');
+      if (!hidden.includes(orderId)) {
+        hidden.push(orderId);
+        localStorage.setItem('admin_hidden_orders', JSON.stringify(hidden));
+      }
+    } catch(e) {}
+    
     if (supabase) {
       await supabase.from('order_items').delete().eq('order_id', orderId);
       await supabase.from('orders').delete().eq('id', orderId);
@@ -353,6 +370,7 @@ export default function App() {
   };
 
   const processingOrdersRef = React.useRef<Set<string>>(new Set());
+  const recentlyUpdatedOrdersRef = React.useRef<Record<string, {status: string, timestamp: number}>>({});
 
   const updateOrderStatus = async (orderId: string, status: Order['status']) => {
     if (processingOrdersRef.current.has(orderId)) return;
@@ -360,17 +378,22 @@ export default function App() {
     const orderToUpdate = orders.find(o => o.id === orderId);
     if (!orderToUpdate) return;
     
-    const oldStatus = orderToUpdate.status;
-    if (oldStatus === status) return;
+    // Check recent local override
+    const recent = recentlyUpdatedOrdersRef.current[orderId];
+    const actualOldStatus = recent && (Date.now() - recent.timestamp < 10000) ? recent.status : orderToUpdate.status;
+    
+    if (actualOldStatus === status) return;
 
     processingOrdersRef.current.add(orderId);
     
     try {
+      recentlyUpdatedOrdersRef.current[orderId] = { status, timestamp: Date.now() };
       setOrders(prev => prev.map(o => o.id === orderId ? { ...o, status } : o));
       
       // Sync to Supabase immediately
       if (supabase) {
-        await supabase.from('orders').update({ status }).eq('id', orderId);
+        const { error } = await supabase.from('orders').update({ status }).eq('id', orderId);
+        if (error) console.error("Error updating order status:", error);
       }
 
       // Handle stock changes
@@ -382,7 +405,8 @@ export default function App() {
         }));
         if (supabase) {
           for(const change of changes) {
-              const { data } = await supabase.from('products').select('stock').eq('id', change.id).single();
+              const { data, error } = await supabase.from('products').select('stock').eq('id', change.id).single();
+              if (error) console.error("Error fetching product stock:", error);
               if (data && data.stock !== undefined) {
                 await supabase.from('products').update({ stock: Math.max(0, data.stock + change.delta) }).eq('id', change.id);
               }
@@ -391,7 +415,7 @@ export default function App() {
       };
 
       const stockIsDeducted = (s: Order['status']) => s === 'accepted' || s === 'completed';
-      const oldDeducted = stockIsDeducted(oldStatus);
+      const oldDeducted = stockIsDeducted(actualOldStatus);
       const newDeducted = stockIsDeducted(status);
 
       if (!oldDeducted && newDeducted) {
@@ -542,7 +566,7 @@ export default function App() {
                   onClick={() => setActiveCategory(cat)}
                   className={`whitespace-nowrap px-5 sm:px-6 py-2 sm:py-2.5 rounded-full border transition-all duration-300 text-sm sm:text-base ${
                     activeCategory === cat 
-                      ? 'bg-white text-black border-white font-medium' 
+                      ? 'bg-white/20 text-white border-white font-medium' 
                       : 'glass-panel border-white/20 hover:bg-white/10 font-medium text-white/80'
                   }`}
                 >
@@ -596,7 +620,7 @@ export default function App() {
             </div>
             <div className="w-1 h-1 rounded-full bg-white/20" />
             <div className="text-white/40">
-              v1.2.03
+              v1.2.04
             </div>
           </div>
         </div>

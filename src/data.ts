@@ -24,7 +24,7 @@ export interface Order {
   items: OrderItem[];
   total: number;
   date: string;
-  status: 'pending' | 'accepted' | 'preparing' | 'completed' | 'rejected' | 'out_for_delivery' | 'rage_blocked';
+  status: 'pending' | 'accepted' | 'preparing' | 'completed' | 'rejected' | 'out_for_delivery' | 'rage_blocked' | 'unanswered';
   paymentMethod?: 'cod' | 'prepaid';
 }
 

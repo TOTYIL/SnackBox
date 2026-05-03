@@ -55,8 +55,9 @@ export const DevPage: React.FC<DevPageProps> = ({ products, setProducts, upiId, 
   const [expandedDates, setExpandedDates] = useState<Record<string, boolean>>({ [new Date().toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })]: true });
   const [isAllExpanded, setIsAllExpanded] = useState(false);
 
-  const prevOrdersCountRef = useRef(orders.length);
   const pendingOrdersCount = orders.filter(o => o.status === 'pending').length;
+
+  const hasPendingOrders = pendingOrdersCount > 0;
 
   useEffect(() => {
     let chimeInterval: any;
@@ -93,20 +94,15 @@ export const DevPage: React.FC<DevPageProps> = ({ products, setProducts, upiId, 
       }
     };
 
-    if (pendingOrdersCount > 0) {
-      if (pendingOrdersCount > prevOrdersCountRef.current) {
-        // play immediately for newly received order
-        playChime();
-      }
-      chimeInterval = setInterval(playChime, 4000); // Check every 4 seconds
+    if (hasPendingOrders) {
+      playChime(); // Play immediately when we go from 0 to >0
+      chimeInterval = setInterval(playChime, 4000); // And then every 4 seconds
     }
     
-    prevOrdersCountRef.current = pendingOrdersCount;
-
     return () => {
       if (chimeInterval) clearInterval(chimeInterval);
     };
-  }, [pendingOrdersCount]);
+  }, [hasPendingOrders]);
 
 
   useEffect(() => {
@@ -122,11 +118,23 @@ export const DevPage: React.FC<DevPageProps> = ({ products, setProducts, upiId, 
     // Auto-status updates to DB
     orders.forEach(o => {
       const age = now - new Date(o.date).getTime();
+      
+      // Auto-mark pending as unanswered after 15 minutes
       if (o.status === 'pending' && age > FIFTEEN_MIN_MS) {
-        updateOrderStatus(o.id, 'rejected');
-      } else if (o.status === 'accepted' && age > HOUR_MS) {
+        updateOrderStatus(o.id, 'unanswered');
+      } 
+      // Auto-complete accepted after 1 hr
+      else if (o.status === 'accepted' && age > HOUR_MS) {
         updateOrderStatus(o.id, 'completed');
       }
+      
+      // Delete rejected or rage blocked permanently after roughly 30 minutes from creation
+      // (assuming they were rejected some time in the first 15 mins)
+      if ((o.status === 'rejected' || o.status === 'rage_blocked') && age > FIFTEEN_MIN_MS * 2) {
+        deleteOrder(o.id);
+      }
+      
+      // Clear out "unanswered" that are too old to prevent clutter (optional but good idea, let's say 24 hrs, but user only said to keep them until crossed)
     });
   }, [now, orders]);
 
@@ -135,10 +143,21 @@ export const DevPage: React.FC<DevPageProps> = ({ products, setProducts, upiId, 
     return { ...o, computedStatus: o.status, age };
   });
 
-  const liveOrders = displayOrders.filter(o => o.computedStatus !== 'completed' && o.computedStatus !== 'rejected' && o.computedStatus !== 'rage_blocked');
+  const liveOrders = displayOrders.filter(o => 
+    o.computedStatus !== 'completed' && 
+    o.computedStatus !== 'rejected' && 
+    o.computedStatus !== 'rage_blocked' && 
+    o.computedStatus !== 'unanswered'
+  );
 
   const historyOrders = displayOrders.filter(o => {
-    return o.computedStatus === 'completed' || o.computedStatus === 'rage_blocked' || o.computedStatus === 'rejected';
+    // Show completed and unanswered. Hide rejected/rage_blocked if they are old (handled above anyway).
+    // The user said: "i dont wan to see any rejected orders which were placed before current time"
+    // So if it's already rejected and its age is > 15 mins, we just don't show it while waiting for the delete to go through.
+    if (o.computedStatus === 'rejected' || o.computedStatus === 'rage_blocked') {
+        return o.age <= FIFTEEN_MIN_MS * 2;
+    }
+    return o.computedStatus === 'completed' || o.computedStatus === 'unanswered';
   });
 
   const historyByDate = historyOrders.reduce((acc, order) => {
@@ -212,6 +231,7 @@ export const DevPage: React.FC<DevPageProps> = ({ products, setProducts, upiId, 
       stock: 10
     };
     setLocalProducts([newProd, ...localProducts]);
+    setProducts([newProd, ...localProducts]);
     setEditingItemId(newId);
   };
 
@@ -321,21 +341,23 @@ export const DevPage: React.FC<DevPageProps> = ({ products, setProducts, upiId, 
                     rejected: 'bg-red-500/20 text-red-300'
                   };
                   return (
-                  <div key={order.id} className={`glass-panel p-5 sm:p-6 rounded-3xl border transition-all duration-500 flex flex-col md:flex-row gap-6 justify-between items-start ${order.computedStatus === 'rejected' ? 'border-white/5 bg-white/5 grayscale opacity-60' : 'border-white/20'}`}>
-                    <div className="flex-1 space-y-4 w-full">
-                      <div className="flex justify-between items-start border-b border-white/10 pb-4">
-                        <div>
-                          <h3 className="text-lg font-bold flex items-center gap-2">
-                            Order Code: <span className="text-pink-300 tracking-wider font-mono bg-pink-500/10 px-2 py-0.5 rounded-md">{order.id}</span>
+                  <div key={order.id} className={`glass-panel p-5 sm:p-6 rounded-3xl border transition-all duration-500 flex flex-col gap-6 justify-between items-start ${order.computedStatus === 'rejected' ? 'border-white/5 bg-white/5 grayscale opacity-60' : 'border-white/20'}`}>
+                    <div className="flex-1 space-y-5 w-full">
+                      <div className="flex justify-between items-start gap-4 border-b border-white/10 pb-4">
+                        <div className="min-w-0">
+                          <h3 className="text-lg font-bold flex flex-wrap items-center gap-2">
+                            <span>Order Code:</span> <span className="text-pink-300 tracking-wider font-mono bg-pink-500/10 px-2 py-0.5 rounded-md break-all">{order.id}</span>
                           </h3>
-                          <p className="text-sm text-white/50">{new Date(order.date).toLocaleString()}</p>
+                          <p className="text-sm text-white/50 mt-1">{new Date(order.date).toLocaleString()}</p>
                         </div>
-                        <span className={`glass-pill px-3 py-1 text-xs font-semibold uppercase tracking-wider ${statusColors[order.computedStatus]}`}>
-                          {order.computedStatus}
-                        </span>
+                        <div className="shrink-0">
+                          <span className={`glass-pill px-3 py-1 text-xs font-semibold uppercase tracking-wider ${statusColors[order.computedStatus]}`}>
+                            {order.computedStatus}
+                          </span>
+                        </div>
                       </div>
                       
-                      <div className="grid grid-cols-2 gap-4">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         <div>
                           <p className="text-xs text-white/50 mb-1">Customer</p>
                           <p className="font-medium text-sm">{order.customerName}</p>
@@ -350,7 +372,7 @@ export const DevPage: React.FC<DevPageProps> = ({ products, setProducts, upiId, 
                         </div>
                         <div>
                           <p className="text-xs text-white/50 mb-1">Payment</p>
-                          <p className="font-medium text-sm text-indigo-300 uppercase">
+                          <p className="font-medium text-[11px] sm:text-xs text-indigo-300 uppercase">
                             {order.paymentMethod === 'prepaid' ? 'Prepaid (Pay Now)' : order.paymentMethod === 'cod' ? 'Cash on Delivery (COD)' : 'Not Specified'}
                           </p>
                         </div>
@@ -407,13 +429,13 @@ export const DevPage: React.FC<DevPageProps> = ({ products, setProducts, upiId, 
                               <button onClick={() => updateOrderStatus(order.id, 'rejected')} className="flex items-center justify-center gap-2 flex-1 bg-red-500/20 text-red-300 hover:bg-red-500/30 transition py-2.5 rounded-xl font-medium">
                                 <X size={16} /> Cancel Order
                               </button>
-                              <button onClick={() => updateOrderStatus(order.id, 'pending')} className="flex items-center justify-center gap-2 flex-1 bg-white/10 text-white hover:bg-white/20 transition py-2.5 rounded-xl font-medium">
+                              <button onClick={() => updateOrderStatus(order.id, 'pending')} className="flex items-center justify-center gap-2 flex-1 bg-white/10 text-white hover:bg-white/20 transition py-2.5 rounded-xl font-medium w-full">
                                 <RotateCcw size={16} /> Undo Accept
                               </button>
                             </>
                           )}
                           {order.computedStatus === 'rejected' && (
-                            <button onClick={() => updateOrderStatus(order.id, 'pending')} className="flex items-center justify-center gap-2 flex-1 bg-white/10 text-white hover:bg-white/20 transition py-2.5 rounded-xl font-medium">
+                            <button onClick={() => updateOrderStatus(order.id, 'pending')} className="flex items-center justify-center gap-2 w-full bg-white/10 text-white hover:bg-white/20 transition py-2.5 rounded-xl font-medium">
                               <RotateCcw size={16} /> Revert to Pending
                             </button>
                           )}
@@ -422,13 +444,13 @@ export const DevPage: React.FC<DevPageProps> = ({ products, setProducts, upiId, 
                       
                       {/* Completion Undo */}
                       {!order.isOld && order.computedStatus === 'completed' && (
-                        <div className="mt-4 pt-4 border-t border-white/10">
+                        <div>
                           <button onClick={() => updateOrderStatus(order.id, 'accepted')} className="flex items-center justify-center gap-2 w-full bg-white/5 text-white/70 hover:bg-white/10 transition py-2.5 rounded-xl font-medium">
                             <RotateCcw size={16} /> Undo Completion
                           </button>
                         </div>
                       )}
-                                       </div>
+                    </div>
                   </div>
                 )})
               )}
@@ -476,43 +498,41 @@ export const DevPage: React.FC<DevPageProps> = ({ products, setProducts, upiId, 
                                 exit={{ height: 0, opacity: 0 }}
                                 className="border-t border-white/10"
                               >
-                                <div className="p-4 flex flex-col gap-4 bg-black/20">
+                                <div className="p-2 sm:p-6 flex flex-col gap-8 bg-black/20">
                                   {dateOrders.map(order => {
                                       const statusColors: Record<string, string> = {
                                         pending: 'bg-yellow-500/20 text-yellow-300',
                                         accepted: 'bg-blue-500/20 text-blue-300',
                                         completed: 'bg-green-500/20 text-green-300',
                                         rejected: 'bg-red-500/20 text-red-300',
-                                        expired: 'bg-red-500/20 text-red-300',
+                                        unanswered: 'bg-orange-500/20 text-orange-300',
                                         rage_blocked: 'bg-red-500/20 text-red-300'
                                       };
                                       return (
-                                        <div key={order.id} className={`glass-panel p-5 sm:p-6 rounded-3xl border transition-all duration-500 flex flex-col md:flex-row gap-6 justify-between items-start border-white/10 ${order.computedStatus === 'rejected' ? 'grayscale opacity-60' : 'opacity-80'}`}>
-                        <div className="flex-1 space-y-4 w-full">
-                          <div className="flex justify-between items-start border-b border-white/10 pb-4">
-                            <div>
-                              <h3 className="text-lg font-bold flex items-center gap-2">
-                                Order Code: <span className="text-white/70 font-mono">{order.id}</span>
+                                        <div key={order.id} className={`bg-white/5 p-6 sm:p-8 mb-4 rounded-3xl border-0 transition-all duration-500 flex flex-col md:flex-row gap-8 justify-between items-start shadow-none ${order.computedStatus === 'rejected' ? 'grayscale opacity-50' : 'opacity-80'}`}>
+                        <div className="flex-1 space-y-5 w-full">
+                          <div className="flex justify-between items-start gap-4 border-b border-white/10 pb-4">
+                            <div className="min-w-0">
+                              <h3 className="text-lg font-bold flex flex-wrap items-center gap-2">
+                                <span>Order Code:</span> <span className="text-white/70 font-mono text-sm break-all">{order.id}</span>
                               </h3>
-                              <p className="text-sm text-white/50">{new Date(order.date).toLocaleString()}</p>
+                              <p className="text-sm text-white/50 mt-1">{new Date(order.date).toLocaleString()}</p>
                             </div>
-                            <div className="flex items-center gap-3">
+                            <div className="flex items-center gap-2 shrink-0">
                               <span className={`glass-pill px-3 py-1 text-xs font-semibold uppercase tracking-wider ${/*ts-ignore*/statusColors[order.computedStatus]}`}>
                                 {order.computedStatus}
                               </span>
-                              {order.computedStatus === 'rejected' && (
-                                <button 
-                                  onClick={() => deleteOrder(order.id)}
-                                  className="text-white/30 hover:text-white transition-colors"
-                                  title="Dismiss / Delete Order"
-                                >
-                                  <X size={18} />
-                                </button>
-                              )}
+                              <button 
+                                onClick={() => deleteOrder(order.id)}
+                                className="text-white/30 hover:text-white transition-colors bg-white/5 hover:bg-white/10 p-1.5 rounded-full"
+                                title="Delete Order"
+                              >
+                                <X size={16} />
+                              </button>
                             </div>
                           </div>
                           
-                          <div className="grid grid-cols-2 gap-4">
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                             <div>
                               <p className="text-xs text-white/50 mb-1">Customer</p>
                               <p className="font-medium text-sm">{order.customerName}</p>
@@ -527,13 +547,14 @@ export const DevPage: React.FC<DevPageProps> = ({ products, setProducts, upiId, 
                             </div>
                             <div>
                               <p className="text-xs text-white/50 mb-1">Payment</p>
-                              <p className="font-medium text-sm text-white/80 uppercase">
+                              <p className="font-medium text-[11px] sm:text-xs text-white/80 uppercase">
                                 {order.paymentMethod === 'prepaid' ? 'Prepaid (Pay Now)' : order.paymentMethod === 'cod' ? 'Cash on Delivery (COD)' : 'Not Specified'}
                               </p>
                             </div>
                           </div>
                           
                           <div className="bg-black/30 rounded-xl p-4 mt-2">
+                            <p className="text-xs text-white/50 mb-2">Items</p>
                             <ul className="space-y-2">
                               {order.items.map(item => (
                                 <li key={item.id} className="flex justify-between text-sm text-white/70">
@@ -577,20 +598,6 @@ export const DevPage: React.FC<DevPageProps> = ({ products, setProducts, upiId, 
                                   <RotateCcw size={16} /> Undo Reject
                                 </button>
                               )}
-                              <button 
-                                onClick={() => {
-                                  const taps = (deleteTaps[order.id] || 0) + 1;
-                                  if (taps >= 5) {
-                                     setDeleteTaps(prev => ({...prev, [order.id]: 0}));
-                                     deleteOrder(order.id);
-                                  } else {
-                                     setDeleteTaps(prev => ({...prev, [order.id]: taps}));
-                                  }
-                                }}
-                                className="flex items-center justify-center w-full px-2 py-1 text-xs text-transparent hover:text-white/20 transition-colors"
-                              >
-                                Clear Forever
-                              </button>
                             </div>
                           )}
                         </div>
@@ -618,9 +625,6 @@ export const DevPage: React.FC<DevPageProps> = ({ products, setProducts, upiId, 
                 <div className="flex gap-3">
                   <button onClick={handleAddProduct} className="glass-button px-4 py-2 rounded-xl flex items-center gap-2 text-sm z-10 shrink-0">
                     <Plus size={16} /> Add Item
-                  </button>
-                  <button onClick={handleSaveInventory} className="bg-white text-black px-4 py-2 rounded-xl font-medium flex items-center gap-2 text-sm z-10 hover:bg-gray-200 transition shrink-0">
-                    <Save size={16} /> Save DB
                   </button>
                 </div>
               </div>
@@ -663,7 +667,7 @@ export const DevPage: React.FC<DevPageProps> = ({ products, setProducts, upiId, 
                           <label className="text-[10px] uppercase tracking-wider text-white/50 ml-1">Name</label>
                           <input type="text" value={product.name} onChange={(e) => handleProductChange(product.id, 'name', e.target.value)} className="glass-input w-full p-2.5 rounded-xl text-sm" />
                         </div>
-                        <div className="grid grid-cols-2 gap-3">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                           <div>
                             <label className="text-[10px] uppercase tracking-wider text-white/50 ml-1">Price (₹)</label>
                             <input type="number" value={product.price} onChange={(e) => handleProductChange(product.id, 'price', e.target.value)} className="glass-input w-full p-2.5 rounded-xl text-sm" />
