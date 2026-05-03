@@ -13,18 +13,28 @@ interface DevPageProps {
   setSiteStatus: (s: 'live' | 'offline') => void;
   orders: Order[];
   updateOrderStatus: (id: string, status: Order['status']) => void;
+  deleteOrder: (id: string) => void;
   onClose: () => void;
 }
 
-export const DevPage: React.FC<DevPageProps> = ({ products, setProducts, qrCodeUrl, setQrCodeUrl, siteStatus, setSiteStatus, orders, updateOrderStatus, onClose }) => {
+export const DevPage: React.FC<DevPageProps> = ({ products, setProducts, qrCodeUrl, setQrCodeUrl, siteStatus, setSiteStatus, orders, updateOrderStatus, deleteOrder, onClose }) => {
   const [localProducts, setLocalProducts] = useState([...products]);
   const [localQr, setLocalQr] = useState(qrCodeUrl);
   const [activeTab, setActiveTab] = useState<'orders' | 'inventory' | 'payment'>('orders');
+
+  useEffect(() => {
+    setLocalProducts([...products]);
+  }, [products]);
+
+  useEffect(() => {
+    setLocalQr(qrCodeUrl);
+  }, [qrCodeUrl]);
 
   
   // Real-time ticker for 1-hour expiration logic
   const [now, setNow] = useState(Date.now());
   const [rageTaps, setRageTaps] = useState<{ [orderId: string]: number }>({});
+  const [deleteTaps, setDeleteTaps] = useState<{ [orderId: string]: number }>({});
   useEffect(() => {
     const interval = setInterval(() => setNow(Date.now()), 60000); // Check every minute
     return () => clearInterval(interval);
@@ -39,14 +49,14 @@ export const DevPage: React.FC<DevPageProps> = ({ products, setProducts, qrCodeU
     const isOld = age > HOUR_MS;
     let computedStatus = o.status;
     
-    // Auto-complete if > 1 hr and it's active
-    if (isOld && (computedStatus === 'pending' || computedStatus === 'accepted')) {
-      computedStatus = 'completed';
-    }
-
     // Cancel forever if pending for > 15 mins
     if (computedStatus === 'pending' && age > FIFTEEN_MIN_MS) {
       computedStatus = 'expired' as any;
+    }
+
+    // Auto-complete if > 1 hr and it's active
+    if (isOld && (computedStatus === 'pending' || computedStatus === 'accepted')) {
+      computedStatus = 'completed';
     }
     
     return { ...o, computedStatus, isOld, age };
@@ -54,9 +64,9 @@ export const DevPage: React.FC<DevPageProps> = ({ products, setProducts, qrCodeU
 
   const liveOrders = displayOrders.filter(o => o.computedStatus !== 'completed' && o.computedStatus !== 'rejected' && o.computedStatus !== 'expired' && o.computedStatus !== 'rage_blocked');
   const historyOrders = displayOrders.filter(o => {
-    if (o.computedStatus === 'completed' || o.computedStatus === 'expired' || o.computedStatus === 'rage_blocked') return true;
-    // If rejected and not changed till 15 minutes it gets deleted
-    if (o.computedStatus === 'rejected') {
+    if (o.computedStatus === 'completed' || o.computedStatus === 'rage_blocked') return true;
+    // If rejected or expired and not changed till 15 minutes it gets deleted visually
+    if (o.computedStatus === 'rejected' || o.computedStatus === 'expired') {
       return o.age <= FIFTEEN_MIN_MS;
     }
     return false;
@@ -393,17 +403,31 @@ export const DevPage: React.FC<DevPageProps> = ({ products, setProducts, qrCodeU
                                </button>
                             </div>
                           )}
-                          {!order.isOld && order.computedStatus === 'rejected' && (
-                            <div className="mt-4 pt-4 border-t border-white/10">
-                              <button onClick={() => updateOrderStatus(order.id, 'pending')} className="flex items-center justify-center gap-2 w-full bg-white/5 text-white/70 hover:bg-white/10 transition py-2.5 rounded-xl font-medium">
-                                <RotateCcw size={16} /> Undo Reject
-                              </button>
-                            </div>
-                          )}
-                          {!order.isOld && order.computedStatus === 'completed' && (
-                            <div className="mt-4 pt-4 border-t border-white/10">
-                              <button onClick={() => updateOrderStatus(order.id, 'accepted')} className="flex items-center justify-center gap-2 w-full bg-white/5 text-white/70 hover:bg-white/10 transition py-2.5 rounded-xl font-medium">
-                                <RotateCcw size={16} /> Undo Completion
+                          {(order.computedStatus === 'completed' || order.computedStatus === 'expired' || order.computedStatus === 'rejected') && (
+                            <div className="mt-4 pt-4 border-t border-white/10 flex flex-col gap-2">
+                              {!order.isOld && order.computedStatus === 'completed' && (
+                                <button onClick={() => updateOrderStatus(order.id, 'accepted')} className="flex items-center justify-center gap-2 w-full bg-white/5 text-white/70 hover:bg-white/10 transition py-2.5 rounded-xl font-medium">
+                                  <RotateCcw size={16} /> Undo Completion
+                                </button>
+                              )}
+                              {!order.isOld && order.computedStatus === 'rejected' && (
+                                <button onClick={() => updateOrderStatus(order.id, 'pending')} className="flex items-center justify-center gap-2 w-full bg-white/5 text-white/70 hover:bg-white/10 transition py-2.5 rounded-xl font-medium">
+                                  <RotateCcw size={16} /> Undo Reject
+                                </button>
+                              )}
+                              <button 
+                                onClick={() => {
+                                  const taps = (deleteTaps[order.id] || 0) + 1;
+                                  if (taps >= 5) {
+                                     setDeleteTaps(prev => ({...prev, [order.id]: 0}));
+                                     deleteOrder(order.id);
+                                  } else {
+                                     setDeleteTaps(prev => ({...prev, [order.id]: taps}));
+                                  }
+                                }}
+                                className="flex items-center justify-center w-full px-2 py-1 text-xs text-transparent hover:text-white/20 transition-colors"
+                              >
+                                Clear Forever
                               </button>
                             </div>
                           )}

@@ -43,6 +43,25 @@ export default function App() {
   const [cartItems, setCartItems] = useState<CartItem[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
 
+  const fetchProducts = async () => {
+    if (!supabase) return;
+    const { data: dbProducts, error: pErr } = await supabase.from('products').select('*').order('created_at', { ascending: true });
+    if (dbProducts && dbProducts.length > 0) {
+      setProductsList(dbProducts.filter(d => Number(d.stock) >= 0).map(d => ({
+        id: d.id, name: d.name, description: d.description, price: Number(d.price), 
+        category: d.category, image: d.image, inStock: d.in_stock, stock: Number(d.stock)
+      })));
+    } else {
+      // Init data
+      setProductsList(initialProducts);
+      const { error: insertErr } = await supabase.from('products').insert(initialProducts.map(p => ({
+        id: p.id, name: p.name, description: p.description, price: p.price, 
+        category: p.category, image: p.image, in_stock: p.inStock, stock: p.stock
+      })));
+      if(insertErr) console.error('Error inserting initial products', insertErr);
+    }
+  };
+
   // Fetch Data on mount
   useEffect(() => {
     if (!supabase) {
@@ -52,22 +71,7 @@ export default function App() {
     }
 
     const loadData = async () => {
-      // Products
-      const { data: dbProducts, error: pErr } = await supabase.from('products').select('*').order('created_at', { ascending: true });
-      if (dbProducts && dbProducts.length > 0) {
-        setProductsList(dbProducts.filter(d => Number(d.stock) >= 0).map(d => ({
-          id: d.id, name: d.name, description: d.description, price: Number(d.price), 
-          category: d.category, image: d.image, inStock: d.in_stock, stock: Number(d.stock)
-        })));
-      } else {
-        // Init data
-        setProductsList(initialProducts);
-        const { error: insertErr } = await supabase.from('products').insert(initialProducts.map(p => ({
-          id: p.id, name: p.name, description: p.description, price: p.price, 
-          category: p.category, image: p.image, in_stock: p.inStock, stock: p.stock
-        })));
-        if(insertErr) console.error('Error inserting initial products', insertErr);
-      }
+      await fetchProducts();
 
       // Payments Config
       const { data: qData } = await supabase.from('payment_config').select('qr_code_url').eq('id', 'config').single();
@@ -97,19 +101,43 @@ export default function App() {
     }, 5000);
 
     // Listen to real-time changes
-    let channel: any = null;
+    let ordersChannel: any = null;
+    let configChannel: any = null;
+    let productsChannel: any = null;
     if (supabase) {
-      channel = supabase
+      ordersChannel = supabase
         .channel('public:orders')
         .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, payload => {
           fetchOrders();
+        })
+        .subscribe();
+
+      configChannel = supabase
+        .channel('public:payment_config')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'payment_config' }, payload => {
+          if (payload.new) {
+             if (payload.new.id === 'site_status') {
+               setSiteStatus(payload.new.qr_code_url === 'offline' ? 'offline' : 'live');
+             } else if (payload.new.id === 'config') {
+               setQrCodeUrl(payload.new.qr_code_url);
+             }
+          }
+        })
+        .subscribe();
+        
+      productsChannel = supabase
+        .channel('public:products')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'products' }, payload => {
+          fetchProducts();
         })
         .subscribe();
     }
 
     return () => {
       clearInterval(interval);
-      if (channel) supabase.removeChannel(channel);
+      if (ordersChannel) supabase.removeChannel(ordersChannel);
+      if (configChannel) supabase.removeChannel(configChannel);
+      if (productsChannel) supabase.removeChannel(productsChannel);
     };
   }, []);
 
@@ -281,6 +309,14 @@ export default function App() {
 
       // Do NOT Deduct stock in DB yet. Wait until accept.
       // for (const item of newOrder.items) { ... }
+    }
+  };
+
+  const deleteOrder = async (orderId: string) => {
+    setOrders(prev => prev.filter(o => o.id !== orderId));
+    if (supabase) {
+      await supabase.from('order_items').delete().eq('order_id', orderId);
+      await supabase.from('orders').delete().eq('id', orderId);
     }
   };
 
@@ -559,6 +595,7 @@ export default function App() {
             }}
             orders={orders}
             updateOrderStatus={updateOrderStatus}
+            deleteOrder={deleteOrder}
             onClose={() => setIsDevMode(false)}
           />
         )}
