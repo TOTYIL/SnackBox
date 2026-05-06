@@ -980,7 +980,7 @@ export default function App() {
               &copy; {new Date().getFullYear()} SnackBox Inc.
             </div>
             <div className="w-1 h-1 rounded-full bg-white/20" />
-            <div className="text-white/40">v1.2.07</div>
+            <div className="text-white/40">v1.2.08</div>
           </div>
         </div>
       </footer>
