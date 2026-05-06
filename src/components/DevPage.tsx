@@ -316,7 +316,14 @@ export const DevPage: React.FC<DevPageProps> = ({
         )
         .subscribe();
     }
+
+    // Fallback polling for robust updates
+    const interval = setInterval(() => {
+      fetchOrders();
+    }, 5000);
+
     return () => {
+      clearInterval(interval);
       if (channel) supabase.removeChannel(channel);
     };
   }, [fetchOrders]);
@@ -385,7 +392,7 @@ export const DevPage: React.FC<DevPageProps> = ({
 
     if (hasPendingOrders) {
       playChime(); // Play immediately when we go from 0 to >0
-      chimeInterval = setInterval(playChime, 4000); // And then every 4 seconds
+      chimeInterval = setInterval(playChime, 3000); // And then every 3 seconds
     }
 
     return () => {
