@@ -2,13 +2,15 @@ import React, { useState, useMemo, useEffect } from 'react';
 import { products as initialProducts, categories, Product, Order } from './data';
 import { ProductCard } from './components/ProductCard';
 import { Cart } from './components/Cart';
-import { DevPage } from './components/DevPage';
+const DevPage = React.lazy(() => import('./components/DevPage').then(m => ({ default: m.DevPage })));
 import { CheckoutModal } from './components/Checkout';
 import { CustomerCare, TermsOfService, PrivacyPolicy } from './components/InfoPages';
 import { OrderTracker } from './components/OrderTracker';
 import { Search, ShoppingBag, Package, X } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { supabase } from './lib/supabase';
+import { AuthForm } from './components/AuthForm';
+import { SplashAnimation } from './components/SplashAnimation';
 
 interface CartItem extends Product {
   quantity: number;
@@ -28,17 +30,31 @@ export default function App() {
   // New States
   const [isSearchExpanded, setIsSearchExpanded] = useState(false);
   const [activePage, setActivePage] = useState<'home' | 'care' | 'terms' | 'privacy'>('home');
-  const [sessionOrderIds, setSessionOrderIds] = useState<string[]>(() => {
+  const [showSplash, setShowSplash] = useState(() => !sessionStorage.getItem('splash_shown'));
+  const [currentUser, setCurrentUser] = useState<{id: string, username: string} | null>(() => {
     try {
-      const saved = sessionStorage.getItem('snackbox_orders');
+      const userStr = localStorage.getItem('app_user');
+      if (userStr) return JSON.parse(userStr);
+    } catch (e) {}
+    return null;
+  });
+  const [dismissedOrderIds, setDismissedOrderIds] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem('dismissed_orders');
       if (saved) return JSON.parse(saved);
     } catch(e) {}
-    const old = sessionStorage.getItem('snackbox_order_id');
-    if (old) return [old];
     return [];
   });
+
+  useEffect(() => {
+    if (!localStorage.getItem('restored_test_order_3')) {
+      localStorage.removeItem('dismissed_orders');
+      setDismissedOrderIds([]);
+      localStorage.setItem('restored_test_order_3', 'true');
+    }
+  }, []);
   const [isTrackerOpen, setIsTrackerOpen] = useState(false);
-  const [siteStatus, setSiteStatus] = useState<'live'|'offline'>('live');
+  const [siteStatus, setSiteStatus] = useState<'live'|'offline'|'loading'>('loading');
 
   const [cartItems, setCartItems] = useState<CartItem[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
@@ -70,12 +86,20 @@ export default function App() {
   }, []);
 
   const fetchOrders = React.useCallback(async () => {
-    if (!supabase) return;
-    const { data: dbOrders } = await supabase.from('orders').select(`
+    if (!supabase || !currentUser) {
+      setOrders([]);
+      return;
+    }
+
+    const { data: dbOrders, error } = await supabase.from('orders').select(`
       *,
       order_items (*)
-    `).order('date', { ascending: false });
-    
+    `).eq('user_id', currentUser.id).order('date', { ascending: false });
+
+    if (error) {
+       console.error("DEBUG RLS: Error fetching your orders. Ensure RLS policies allow SELECTing orders by ID. Error:", error);
+    }
+
     if (dbOrders) {
       const hidden = JSON.parse(localStorage.getItem('admin_hidden_orders') || '[]');
       const newOrders = dbOrders.filter(dbO => !hidden.includes(dbO.id)).map(o => {
@@ -123,13 +147,14 @@ export default function App() {
         return newOrders;
       });
     }
-  }, []);
+  }, [currentUser]);
 
   // Fetch Data on mount
   useEffect(() => {
     if (!supabase) {
       console.warn('Supabase client not found. Falling back to local data.');
       setProductsList(initialProducts);
+      setSiteStatus('live');
       return;
     }
 
@@ -150,6 +175,7 @@ export default function App() {
         setSiteStatus(statusData.qr_code_url === 'offline' ? 'offline' : 'live');
       } else {
         await supabase.from('payment_config').insert({ id: 'site_status', qr_code_url: 'live' });
+        setSiteStatus('live');
       }
 
       // Orders
@@ -178,12 +204,17 @@ export default function App() {
     let configChannel: any = null;
     let productsChannel: any = null;
     if (supabase) {
-      ordersChannel = supabase
-        .channel('public:orders')
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, payload => {
-          fetchOrders();
-        })
-        .subscribe();
+      if (currentUser) {
+        const orderFilters: any = { event: '*', schema: 'public', table: 'orders' };
+        orderFilters.filter = `user_id=eq.${currentUser.id}`;
+        
+        ordersChannel = supabase
+          .channel('public:orders_user_' + currentUser.id)
+          .on('postgres_changes', orderFilters, payload => {
+            fetchOrders();
+          })
+          .subscribe();
+      }
 
       configChannel = supabase
         .channel('public:payment_config')
@@ -213,9 +244,7 @@ export default function App() {
       if (configChannel) supabase.removeChannel(configChannel);
       if (productsChannel) supabase.removeChannel(productsChannel);
     };
-  }, [fetchOrders, fetchProducts]);
-
-
+  }, [fetchOrders, fetchProducts, currentUser]);
 
   // Intercept special search query
   useEffect(() => {
@@ -235,11 +264,10 @@ export default function App() {
   // Check rage mode via user orders
   const isRageBlocked = useMemo(() => {
     return orders.some(o => 
-      sessionOrderIds.includes(o.id) && 
       o.status === 'rage_blocked' && 
       Date.now() - new Date(o.date).getTime() < 2 * 60 * 60 * 1000
     );
-  }, [orders, sessionOrderIds]);
+  }, [orders]);
 
   const filteredProducts = useMemo(() => {
     const list = productsList.filter(p => {
@@ -270,6 +298,25 @@ export default function App() {
     });
   }, []);
 
+  const cravePoints = useMemo(() => {
+    let earned = 0;
+    let used = 0;
+    orders.forEach(o => {
+      // Points earned from completed orders
+      if (o.status === 'completed') {
+        earned += o.total * 0.02;
+      }
+      // Points used in any non-rejected order
+      if (o.status !== 'rejected' && o.status !== 'rage_blocked') {
+        const match = o.room.match(/\|\|P:([\d.]+)/);
+        if (match) {
+          used += parseFloat(match[1]);
+        }
+      }
+    });
+    return Math.max(0, earned - used);
+  }, [orders]);
+
   const updateQuantity = React.useCallback((id: string, delta: number) => {
     setCartItems(prev => prev.map(item => {
       if (item.id === id) {
@@ -286,13 +333,21 @@ export default function App() {
     setIsCheckoutOpen(true);
   };
 
-  const finishCheckout = async (customerData: {name: string, phone: string, room: string, id: string, paymentMethod?: 'cod' | 'prepaid'}) => {
+  const finishCheckout = async (customerData: {name: string, phone: string, room: string, id: string, paymentMethod?: 'cod' | 'prepaid', pointsUsed?: number}) => {
     let orderTotal = cartItems.reduce((acc, item) => acc + item.price * item.quantity, 0);
     const cartTotalItems = cartItems.reduce((acc, item) => acc + item.quantity, 0);
     
+    let actualPointsUsed = 0;
+    if (customerData.pointsUsed && customerData.pointsUsed > 0 && cravePoints >= 1) {
+      actualPointsUsed = Math.min(orderTotal, cravePoints, customerData.pointsUsed);
+      orderTotal -= actualPointsUsed;
+      orderTotal = Math.max(0, orderTotal);
+    }
+
     if (customerData.paymentMethod === 'prepaid') {
       const discount = Math.min(0.5, cartTotalItems * 0.1);
       orderTotal -= discount;
+      orderTotal = Math.max(0, orderTotal);
     }
 
     const newOrder: Order = {
@@ -307,7 +362,7 @@ export default function App() {
         price: item.price,
         quantity: item.quantity
       })),
-      total: orderTotal,
+      total: Number(orderTotal.toFixed(2)),
       date: new Date().toISOString(),
       status: 'pending'
     };
@@ -322,21 +377,23 @@ export default function App() {
     setIsCheckoutOpen(false);
     
     // Set for session tracking
-    const newSessionIds = [newOrder.id, ...sessionOrderIds.filter(id => id !== newOrder.id)];
-    sessionStorage.setItem('snackbox_orders', JSON.stringify(newSessionIds));
-    setSessionOrderIds(newSessionIds);
     setIsTrackerOpen(true);
 
     // Sync to Supabase
-    if (supabase) {
+    if (supabase && currentUser) {
+      const roomString = newOrder.room + 
+                         (customerData.paymentMethod ? '||' + customerData.paymentMethod : '') + 
+                         (actualPointsUsed > 0 ? '||P:' + actualPointsUsed.toFixed(2) : '');
+                         
       await supabase.from('orders').insert({
         id: newOrder.id,
         customer_name: newOrder.customerName,
         phone: newOrder.phone,
-        room: newOrder.room + (customerData.paymentMethod ? '||' + customerData.paymentMethod : ''),
+        room: roomString,
         total: newOrder.total,
         status: newOrder.status,
-        date: newOrder.date
+        date: newOrder.date,
+        user_id: currentUser.id
       });
 
       await supabase.from('order_items').insert(newOrder.items.map(item => ({
@@ -435,14 +492,26 @@ export default function App() {
 
   const trackedOrders = useMemo(() => {
     return orders.filter(o => {
-      if (!sessionOrderIds.includes(o.id)) return false;
+      if (dismissedOrderIds.includes(o.id)) return false;
       if (o.status === 'completed' || o.status === 'rejected' || o.status === 'rage_blocked') {
           const orderTime = new Date(o.date).getTime();
           if (Date.now() - orderTime > 30 * 60 * 1000) return false;
       }
       return true;
     });
-  }, [orders, sessionOrderIds]);
+  }, [orders, dismissedOrderIds]);
+
+  if (!currentUser) {
+    return (
+      <>
+        <div className="mesh-bg" />
+        <AuthForm onAuthComplete={(user) => {
+          localStorage.setItem('app_user', JSON.stringify(user));
+          setCurrentUser(user);
+        }} />
+      </>
+    );
+  }
 
   if (isRageBlocked) {
     return (
@@ -459,6 +528,14 @@ export default function App() {
 
   return (
     <>
+      {showSplash && (
+        <SplashAnimation
+          onComplete={() => {
+            sessionStorage.setItem('splash_shown', 'true');
+            setShowSplash(false);
+          }}
+        />
+      )}
       <div className="mesh-bg" />
       
       <div className="min-h-screen flex flex-col pt-24 pb-12 px-4 sm:px-6 lg:px-12 w-full max-w-[1800px] mx-auto">
@@ -530,18 +607,58 @@ export default function App() {
           </div>
         </nav>
 
-        {siteStatus === 'offline' ? (
+        {siteStatus === 'loading' ? (
+           <div className="flex-1 flex flex-col items-center justify-center text-center mt-20">
+               <div className="w-10 h-10 border-4 border-pink-500 border-t-transparent rounded-full animate-spin mb-4"></div>
+               <p className="text-white/50 animate-pulse">Waking up the owl...</p>
+           </div>
+        ) : siteStatus === 'offline' ? (
            <div className="flex-1 flex flex-col items-center justify-center text-center mt-20">
               <svg viewBox="0 0 100 100" className="w-48 h-48 mb-8 text-indigo-300 drop-shadow-[0_0_15px_rgba(165,180,252,0.3)]">
-                 <path d="M50 85 C40 85 30 75 30 60 C30 45 40 30 50 20 C60 30 70 45 70 60 C70 75 60 85 50 85 Z" fill="currentColor" fillOpacity="0.2" stroke="currentColor" strokeWidth="2"/>
-                 <circle cx="42" cy="50" r="4" fill="currentColor"/>
-                 <circle cx="58" cy="50" r="4" fill="currentColor"/>
-                 <path d="M48 60 Q50 65 52 60" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
-                 <path d="M20 30 Q30 20 40 35" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
-                 <path d="M80 30 Q70 20 60 35" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
-                 <text x="70" y="30" fontSize="12" fill="currentColor" fontFamily="monospace" style={{animation: "float 3s infinite ease-in-out"}}>Z</text>
-                 <text x="80" y="20" fontSize="16" fill="currentColor" fontFamily="monospace" style={{animation: "float 3s infinite ease-in-out 1s"}}>Z</text>
-                 <text x="90" y="10" fontSize="20" fill="currentColor" fontFamily="monospace" style={{animation: "float 3s infinite ease-in-out 2s"}}>Z</text>
+                  <g fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                      {/* Z Z */}
+                      <g style={{ animation: 'floatZ 4s ease-in-out infinite' }} transformOrigin="72px 20px">
+                         <path d="M 68 15 L 76 15 L 68 24 L 76 24" strokeWidth="3" />
+                      </g>
+                      <g style={{ animation: 'floatZSmall 4s ease-in-out infinite 2s' }} transformOrigin="61px 23px">
+                         <path d="M 58 20 L 64 20 L 58 26 L 64 26" strokeWidth="2.5" />
+                      </g>
+                      
+                      {/* Outer body contour */}
+                      <path d="M 23 45 C 10 75 25 90 50 90 C 75 90 90 75 77 45" />
+
+                      <g style={{ animation: 'owlBreathe 4s ease-in-out infinite' }}>
+                        {/* Head contour */}
+                        <path d="M 19 46 Q 16 28 26 18 Q 34 26 42 28 Q 50 30 58 28 Q 63 26 66 22" /> 
+                        <path d="M 81 46 Q 84 28 74 18 Q 72 20 70 24" />
+
+                        {/* Eyes (big circular rings) */}
+                        <circle cx="35" cy="44" r="12" />
+                        <circle cx="65" cy="44" r="12" />
+
+                        {/* Sleepy closed eyes (inner curves) */}
+                        <path d="M 28 44 Q 35 52 42 44" />
+                        <path d="M 58 44 Q 65 52 72 44" />
+
+                        {/* Beak */}
+                        <path d="M 46 50 Q 50 47 54 50 L 50 57 Z" />
+                      </g>
+
+                      {/* Wings (inner body curves) */}
+                      <path d="M 23 55 C 32 75 28 85 30 87" />
+                      <path d="M 77 55 C 68 75 72 85 70 87" />
+
+                      {/* Belly Feathers */}
+                      <path d="M 38 68 Q 44 74 50 68 Q 56 74 62 68" />
+                      <path d="M 44 76 Q 50 82 56 76" />
+
+                      {/* Feet (toes) */}
+                      <path d="M 38 88 L 38 94 M 43 88 L 43 94 M 48 88 L 48 94" />
+                      <path d="M 52 88 L 52 94 M 57 88 L 57 94 M 62 88 L 62 94" />
+
+                      {/* Branch / Perch */}
+                      <path d="M 35 91 L 65 91" />
+                  </g>
               </svg>
               <h2 className="text-3xl font-bold mb-4">Shh... The owl is sleeping</h2>
               <p className="text-white/60 text-lg">We are currently not accepting orders. Check back later!</p>
@@ -620,7 +737,7 @@ export default function App() {
             </div>
             <div className="w-1 h-1 rounded-full bg-white/20" />
             <div className="text-white/40">
-              v1.2.04
+              v1.2.05
             </div>
           </div>
         </div>
@@ -640,6 +757,7 @@ export default function App() {
         total={cartTotalPrice}
         cartTotalItems={cartTotalItems}
         upiId={upiId}
+        cravePoints={cravePoints}
         onComplete={finishCheckout}
       />
 
@@ -653,23 +771,22 @@ export default function App() {
       {/* Secret Dev Page */}
       <AnimatePresence>
         {isDevMode && (
-          <DevPage 
-            products={productsList}
-            setProducts={setProductsList}
-            upiId={upiId}
-            setUpiId={setUpiId}
-            siteStatus={siteStatus}
-            setSiteStatus={async (s) => {
-              setSiteStatus(s);
-              if (supabase) {
-                await supabase.from('payment_config').update({ qr_code_url: s }).eq('id', 'site_status');
-              }
-            }}
-            orders={orders}
-            updateOrderStatus={updateOrderStatus}
-            deleteOrder={deleteOrder}
-            onClose={() => setIsDevMode(false)}
-          />
+          <React.Suspense fallback={null}>
+            <DevPage 
+              products={productsList}
+              setProducts={setProductsList}
+              upiId={upiId}
+              setUpiId={setUpiId}
+              siteStatus={siteStatus === 'loading' ? 'live' : siteStatus}
+              setSiteStatus={async (s) => {
+                setSiteStatus(s);
+                if (supabase) {
+                  await supabase.from('payment_config').update({ qr_code_url: s }).eq('id', 'site_status');
+                }
+              }}
+              onClose={() => setIsDevMode(false)}
+            />
+          </React.Suspense>
         )}
       </AnimatePresence>
 
@@ -677,10 +794,12 @@ export default function App() {
         orders={trackedOrders} 
         isOpen={isTrackerOpen}
         onClose={() => setIsTrackerOpen(false)}
+        currentUser={currentUser}
+        cravePoints={cravePoints}
         onClearOrder={(id) => {
-          const newIds = sessionOrderIds.filter(sid => sid !== id);
-          sessionStorage.setItem('snackbox_orders', JSON.stringify(newIds));
-          setSessionOrderIds(newIds);
+          const newIds = [...dismissedOrderIds, id];
+          localStorage.setItem('dismissed_orders', JSON.stringify(newIds));
+          setDismissedOrderIds(newIds);
         }} 
       />
     </>
