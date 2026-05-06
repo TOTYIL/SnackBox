@@ -264,7 +264,15 @@ export const DevPage: React.FC<DevPageProps> = ({
   };
 
   const deleteOrderImmediately = async (id: string) => {
-    // Hide locally so it survives refreshes
+    // Also delete from Supabase using the secure RPC so spam is actually removed
+    if (supabase) {
+      await supabase.rpc("admin_delete_order", {
+        p_username: "Totyil",
+        p_password: "snackdev2403",
+        p_order_id: id,
+      });
+    }
+    // Hide locally so it survives refreshes faster
     const hidden = JSON.parse(
       localStorage.getItem("admin_hidden_orders") || "[]",
     );

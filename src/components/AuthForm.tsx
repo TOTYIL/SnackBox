@@ -44,36 +44,9 @@ export function AuthForm({ onAuthComplete }: AuthProps) {
 
       } else {
         // Signup
-        // First check if username exists
-        const { data: existingUser } = await supabase
-          .from('app_users')
-          .select('id')
-          .eq('username', username.trim())
-          .single();
-
-        if (existingUser) {
-          setError('Username already taken. Please choose another.');
-          setLoading(false);
-          return;
-        }
-
-        const { data, error: insertError } = await supabase
-          .from('app_users')
-          .insert({
-            username: username.trim(),
-            password: password
-          })
-          .select()
-          .single();
-
-        if (insertError || !data) {
-          setError('Failed to create account. Please try again.');
-          console.error(insertError);
-          setLoading(false);
-          return;
-        }
-
-        onAuthComplete({ id: data.id, username: data.username });
+        setError('New account creation has been disabled by the administrator for security reasons.');
+        setLoading(false);
+        return;
       }
     } catch (err) {
       setError('An unexpected error occurred.');
