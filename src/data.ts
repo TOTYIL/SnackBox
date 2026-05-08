@@ -7,6 +7,7 @@ export interface Product {
   category: string;
   inStock: boolean;
   stock: number;
+  costPrice?: number;
 }
 
 export interface OrderItem {
@@ -26,6 +27,10 @@ export interface Order {
   date: string;
   status: 'pending' | 'accepted' | 'preparing' | 'completed' | 'rejected' | 'out_for_delivery' | 'rage_blocked' | 'unanswered';
   paymentMethod?: 'cod' | 'prepaid';
+  pointsUsed?: number;
+  prepaidDiscount?: number;
+  cravePointsDisabled?: boolean;
+  dbRoom?: string;
 }
 
 export const categories = [

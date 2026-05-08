@@ -17,9 +17,19 @@ import {
   Minimize2,
   ChevronDown,
   ChevronUp,
+  BarChart3,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { supabase } from "../lib/supabase";
+import {
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  Tooltip as RechartsTooltip,
+  ResponsiveContainer,
+  CartesianGrid,
+} from "recharts";
 
 interface DevPageProps {
   products: Product[];
@@ -42,10 +52,24 @@ export const DevPage: React.FC<DevPageProps> = ({
 }) => {
   const [orders, setOrders] = useState<Order[]>([]);
   const [localProducts, setLocalProducts] = useState([...products]);
+  const [costPrices, setCostPrices] = useState<Record<string, any>>({});
   const [localQr, setLocalQr] = useState(upiId);
   const [activeTab, setActiveTab] = useState<
-    "orders" | "inventory" | "payment"
+    "orders" | "inventory" | "payment" | "analytics"
   >("orders");
+
+  useEffect(() => {
+    if (supabase) {
+      supabase.from("payment_config").select("qr_code_url").eq("id", "cost_prices").single().then(({data}) => {
+        if (data && data.qr_code_url) {
+          try {
+            const parsed = JSON.parse(data.qr_code_url);
+            setCostPrices(parsed);
+          } catch(e) {}
+        }
+      });
+    }
+  }, [supabase]);
   const [editingItemId, setEditingItemId] = useState<string | null>(null);
   const [clearingIds, setClearingIds] = useState<Record<string, boolean>>({});
   const timeoutRefs = useRef<Record<string, NodeJS.Timeout>>({});
@@ -125,12 +149,16 @@ export const DevPage: React.FC<DevPageProps> = ({
         .map((o) => {
           let actualRoom = o.room;
           let paymentMethod: "cod" | "prepaid" | undefined = undefined;
+          let pointsUsed = 0;
           if (o.payment_method) {
             paymentMethod = o.payment_method;
           } else if (typeof o.room === "string" && o.room.includes("||")) {
             const parts = o.room.split("||");
             actualRoom = parts[0];
             paymentMethod = parts[1] as any;
+            if (parts.length > 2 && parts[2].startsWith("P:")) {
+              pointsUsed = Number(parts[2].substring(2));
+            }
           }
 
           let statusToUse = o.status;
@@ -139,21 +167,31 @@ export const DevPage: React.FC<DevPageProps> = ({
             statusToUse = a > 15 * 60 * 1000 ? "unanswered" : "pending";
           }
 
+          const items = o.order_items.map((oi: any) => ({
+            id: oi.product_id,
+            name: oi.name,
+            price: Number(oi.price),
+            quantity: oi.quantity,
+          }));
+
+          const cartTotalItems = items.reduce((acc: number, item: any) => acc + item.quantity, 0);
+          const prepaidDiscount = paymentMethod === "prepaid" ? Math.min(0.5, cartTotalItems * 0.1) : 0;
+          const cravePointsDisabled = o.crave_points_disabled === true || (typeof o.room === "string" && o.room.includes("||C:NO"));
+
           return {
             id: o.id,
             customerName: o.customer_name,
             room: actualRoom,
+            dbRoom: o.room,
             phone: o.phone,
             paymentMethod,
+            pointsUsed,
+            prepaidDiscount,
+            cravePointsDisabled,
             date: o.date,
             total: Number(o.total),
             status: statusToUse,
-            items: o.order_items.map((oi: any) => ({
-              id: oi.product_id,
-              name: oi.name,
-              price: Number(oi.price),
-              quantity: oi.quantity,
-            })),
+            items,
           };
         });
       setOrders((prev) => {
@@ -243,24 +281,39 @@ export const DevPage: React.FC<DevPageProps> = ({
 
       if (!oldDeducted && newDeducted) {
         // Transitioned to Accepted/Completed: Deduct Stock
-        await doUpdateStock(
+        doUpdateStock(
           orderToUpdate.items.map((item) => ({
             id: item.id,
             delta: -item.quantity,
           })),
-        );
+        ).catch(console.error);
       } else if (oldDeducted && !newDeducted) {
         // Transitioned to Pending/Rejected: Restore Stock
-        await doUpdateStock(
+        doUpdateStock(
           orderToUpdate.items.map((item) => ({
             id: item.id,
             delta: item.quantity,
           })),
-        );
+        ).catch(console.error);
       }
     } finally {
       processingOrdersRef.current.delete(orderId);
     }
+  };
+
+  const handleToggleCraveCandies = async (orderId: string, currentDbRoom: string) => {
+    if (!supabase) return;
+    const isDisabled = currentDbRoom.includes("||C:NO");
+    let newDbRoom = currentDbRoom;
+    if (isDisabled) {
+      newDbRoom = currentDbRoom.split("||C:NO").join("");
+    } else {
+      newDbRoom = currentDbRoom + "||C:NO";
+    }
+
+    setOrders((prev) => prev.map((o) => o.id === orderId ? { ...o, dbRoom: newDbRoom, cravePointsDisabled: !isDisabled } : o));
+
+    await supabase.from("orders").update({ room: newDbRoom }).eq("id", orderId);
   };
 
   const deleteOrderImmediately = async (id: string) => {
@@ -328,7 +381,7 @@ export const DevPage: React.FC<DevPageProps> = ({
     // Fallback polling for robust updates
     const interval = setInterval(() => {
       fetchOrders();
-    }, 5000);
+    }, 2000);
 
     return () => {
       clearInterval(interval);
@@ -342,6 +395,7 @@ export const DevPage: React.FC<DevPageProps> = ({
   const [deleteTaps, setDeleteTaps] = useState<{ [orderId: string]: number }>(
     {},
   );
+  const [analyticsTimeline, setAnalyticsTimeline] = useState<string>("all");
 
   const [expandedDates, setExpandedDates] = useState<Record<string, boolean>>({
     [new Date().toLocaleDateString(undefined, {
@@ -400,7 +454,7 @@ export const DevPage: React.FC<DevPageProps> = ({
 
     if (hasPendingOrders) {
       playChime(); // Play immediately when we go from 0 to >0
-      chimeInterval = setInterval(playChime, 3000); // And then every 3 seconds
+      chimeInterval = setInterval(playChime, 1500); // And then every 1.5 seconds
     }
 
     return () => {
@@ -551,6 +605,13 @@ export const DevPage: React.FC<DevPageProps> = ({
         in_stock: p.inStock,
         stock: p.stock,
       });
+
+      // Update cost prices
+      const updatedCostPrices = { ...costPrices };
+      await supabase.from("payment_config").upsert({
+        id: "cost_prices",
+        qr_code_url: JSON.stringify(updatedCostPrices),
+      });
     }
   };
 
@@ -610,6 +671,13 @@ export const DevPage: React.FC<DevPageProps> = ({
         stock: p.stock,
       })),
     );
+
+    // Save all cost prices
+    const updatedCostPrices = { ...costPrices };
+    await supabase.from("payment_config").upsert({
+      id: "cost_prices",
+      qr_code_url: JSON.stringify(updatedCostPrices),
+    });
   };
 
   const handleSavePayment = async () => {
@@ -671,6 +739,13 @@ export const DevPage: React.FC<DevPageProps> = ({
             >
               <CreditCard size={18} className="shrink-0" />{" "}
               <span className="hidden sm:inline">Payment Config</span>
+            </button>
+            <button
+              onClick={() => setActiveTab("analytics")}
+              className={`flex flex-1 justify-center items-center gap-2 px-3 sm:px-5 py-3 rounded-t-xl transition-colors font-medium text-sm sm:text-base ${activeTab === "analytics" ? "bg-white/10 text-white border-b-2 border-orange-400" : "text-white/60 hover:text-white"}`}
+            >
+              <BarChart3 size={18} className="shrink-0" />{" "}
+              <span className="hidden sm:inline">Analytics</span>
             </button>
           </div>
         </div>
@@ -760,6 +835,19 @@ export const DevPage: React.FC<DevPageProps> = ({
                                   : "Not Specified"}
                             </p>
                           </div>
+                          <div>
+                            <p className="text-xs text-white/50 mb-1">Crave Candies Action</p>
+                            <button
+                              onClick={() => handleToggleCraveCandies(order.id, order.dbRoom || order.room)}
+                              className={`px-3 py-1 mt-0.5 rounded-full text-[10px] sm:text-xs font-bold transition-all ${
+                                !order.cravePointsDisabled
+                                  ? "bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30 border border-emerald-500/30"
+                                  : "bg-red-500/20 text-red-300 hover:bg-red-500/30 border border-red-500/30"
+                              }`}
+                            >
+                              {!order.cravePointsDisabled ? "ON (Allow)" : "OFF (Disabled)"}
+                            </button>
+                          </div>
                         </div>
 
                         <div className="bg-black/30 rounded-xl p-4 mt-2">
@@ -782,12 +870,39 @@ export const DevPage: React.FC<DevPageProps> = ({
                               </li>
                             ))}
                           </ul>
-                          <div className="mt-4 pt-3 border-t border-white/10 flex justify-between font-bold">
-                            <span>Total</span>
-                            <span className="text-pink-300">
-                              ₹{order.total.toFixed(2)}
-                            </span>
-                          </div>
+                          {(order.pointsUsed || order.prepaidDiscount) ? (
+                            <div className="mt-4 pt-3 border-t border-white/10 space-y-1">
+                              <div className="flex justify-between text-sm text-white/50">
+                                <span>Subtotal</span>
+                                <span>₹{order.items.reduce((acc, item) => acc + item.price * item.quantity, 0).toFixed(2)}</span>
+                              </div>
+                              {order.pointsUsed ? (
+                                <div className="flex justify-between text-sm text-emerald-400">
+                                  <span>Crave Candies Used</span>
+                                  <span>-₹{order.pointsUsed.toFixed(2)}</span>
+                                </div>
+                              ) : null}
+                              {order.prepaidDiscount ? (
+                                <div className="flex justify-between text-sm text-emerald-400">
+                                  <span>Prepaid Discount</span>
+                                  <span>-₹{order.prepaidDiscount.toFixed(2)}</span>
+                                </div>
+                              ) : null}
+                              <div className="pt-2 flex justify-between font-bold">
+                                <span>Final Total</span>
+                                <span className="text-pink-300">
+                                  ₹{Math.max(0, order.total - (order.pointsUsed || 0) - (order.prepaidDiscount || 0)).toFixed(2)}
+                                </span>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="mt-4 pt-3 border-t border-white/10 flex justify-between font-bold">
+                              <span>Total</span>
+                              <span className="text-pink-300">
+                                ₹{order.total.toFixed(2)}
+                              </span>
+                            </div>
+                          )}
                         </div>
 
                         {/* Action Buttons */}
@@ -947,12 +1062,20 @@ export const DevPage: React.FC<DevPageProps> = ({
                                 {dateOrders.length !== 1 ? "s" : ""}
                               </p>
                             </div>
-                            <div className="text-white/40">
-                              {isExpanded ? (
-                                <ChevronUp size={20} />
-                              ) : (
-                                <ChevronDown size={20} />
-                              )}
+                            <div className="flex items-center gap-4">
+                              <div className="text-right">
+                                <p className="text-sm font-bold text-emerald-400">
+                                  ₹{dateOrders.reduce((sum, o) => sum + Math.max(0, o.total - (o.pointsUsed || 0) - (o.prepaidDiscount || 0)), 0).toFixed(2)}
+                                </p>
+                                <p className="text-[10px] text-white/40">Total Value</p>
+                              </div>
+                              <div className="text-white/40">
+                                {isExpanded ? (
+                                  <ChevronUp size={20} />
+                                ) : (
+                                  <ChevronDown size={20} />
+                                )}
+                              </div>
                             </div>
                           </button>
 
@@ -1084,6 +1207,19 @@ export const DevPage: React.FC<DevPageProps> = ({
                                                     : "Not Specified"}
                                               </p>
                                             </div>
+                                            <div>
+                                              <p className="text-xs text-white/50 mb-1">Crave Candies Action</p>
+                                              <button
+                                                onClick={() => handleToggleCraveCandies(order.id, order.dbRoom || order.room)}
+                                                className={`px-3 py-1 mt-0.5 rounded-full text-[10px] sm:text-xs font-bold transition-all ${
+                                                  !order.cravePointsDisabled
+                                                    ? "bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30 border border-emerald-500/30"
+                                                    : "bg-red-500/20 text-red-300 hover:bg-red-500/30 border border-red-500/30"
+                                                }`}
+                                              >
+                                                {!order.cravePointsDisabled ? "ON (Allow)" : "OFF (Disabled)"}
+                                              </button>
+                                            </div>
                                           </div>
 
                                           <div className="bg-black/30 rounded-xl p-4 mt-2">
@@ -1111,12 +1247,40 @@ export const DevPage: React.FC<DevPageProps> = ({
                                                 </li>
                                               ))}
                                             </ul>
-                                            <div className="mt-4 pt-3 border-t border-white/10 flex justify-between font-bold">
-                                              <span>Total</span>
-                                              <span className="text-white/80">
-                                                ₹{order.total.toFixed(2)}
-                                              </span>
-                                            </div>
+
+                                            {(order.pointsUsed || order.prepaidDiscount) ? (
+                                              <div className="mt-4 pt-3 border-t border-white/10 space-y-1">
+                                                <div className="flex justify-between text-sm text-white/50">
+                                                  <span>Subtotal</span>
+                                                  <span>₹{order.items.reduce((acc, item) => acc + item.price * item.quantity, 0).toFixed(2)}</span>
+                                                </div>
+                                                {order.pointsUsed ? (
+                                                  <div className="flex justify-between text-sm text-emerald-400">
+                                                    <span>Crave Candies Used</span>
+                                                    <span>-₹{order.pointsUsed.toFixed(2)}</span>
+                                                  </div>
+                                                ) : null}
+                                                {order.prepaidDiscount ? (
+                                                  <div className="flex justify-between text-sm text-emerald-400">
+                                                    <span>Prepaid Discount</span>
+                                                    <span>-₹{order.prepaidDiscount.toFixed(2)}</span>
+                                                  </div>
+                                                ) : null}
+                                                <div className="pt-2 flex justify-between font-bold">
+                                                  <span>Final Total</span>
+                                                  <span className="text-white/80">
+                                                    ₹{Math.max(0, order.total - (order.pointsUsed || 0) - (order.prepaidDiscount || 0)).toFixed(2)}
+                                                  </span>
+                                                </div>
+                                              </div>
+                                            ) : (
+                                              <div className="mt-4 pt-3 border-t border-white/10 flex justify-between font-bold">
+                                                <span>Total</span>
+                                                <span className="text-white/80">
+                                                  ₹{order.total.toFixed(2)}
+                                                </span>
+                                              </div>
+                                            )}
                                           </div>
 
                                           {/* History Action Buttons */}
@@ -1216,11 +1380,11 @@ export const DevPage: React.FC<DevPageProps> = ({
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              <div className="columns-1 md:columns-2 lg:columns-3 gap-4">
                 {localProducts.map((product) => (
                   <div
                     key={product.id}
-                    className={`glass-panel p-4 rounded-3xl border transition-all ${editingItemId === product.id ? "border-indigo-400 bg-white/10" : "border-white/10"}`}
+                    className={`glass-panel p-4 rounded-3xl border transition-all mb-4 break-inside-avoid ${editingItemId === product.id ? "border-indigo-400 bg-white/10" : "border-white/10"}`}
                   >
                     {editingItemId !== product.id ? (
                       // Display Mode Card
@@ -1296,7 +1460,7 @@ export const DevPage: React.FC<DevPageProps> = ({
                             className="glass-input w-full p-2.5 rounded-xl text-sm"
                           />
                         </div>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                           <div>
                             <label className="text-[10px] uppercase tracking-wider text-white/50 ml-1">
                               Price (₹)
@@ -1312,6 +1476,22 @@ export const DevPage: React.FC<DevPageProps> = ({
                                 )
                               }
                               className="glass-input w-full p-2.5 rounded-xl text-sm"
+                            />
+                          </div>
+                          <div>
+                            <label className="text-[10px] uppercase tracking-wider text-indigo-400 ml-1">
+                              Cost (₹) (Dev Only)
+                            </label>
+                            <input
+                              type="number"
+                              value={costPrices[product.id] === undefined ? "" : costPrices[product.id]}
+                              onChange={(e) =>
+                                setCostPrices(prev => ({
+                                  ...prev,
+                                  [product.id]: e.target.value
+                                }))
+                              }
+                              className="glass-input w-full p-2.5 rounded-xl text-sm bg-indigo-500/10 border-indigo-500/30 text-indigo-200"
                             />
                           </div>
                           <div>
@@ -1390,7 +1570,151 @@ export const DevPage: React.FC<DevPageProps> = ({
             </motion.div>
           )}
 
-          {/* PAYMENT TAB */}
+          {/* ANALYTICS TAB */}
+          {activeTab === "analytics" && (
+            <motion.div
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="space-y-6"
+            >
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
+                <h2 className="text-2xl flex items-center font-semibold">
+                   Analytics
+                </h2>
+                <div className="flex gap-2 bg-black/20 p-1.5 rounded-xl self-start sm:self-auto overflow-x-auto items-center">
+                    {[
+                      { value: "all", label: "All Time" },
+                      { value: "1", label: "24h" },
+                      { value: "7", label: "7d" },
+                      { value: "30", label: "30d" },
+                    ].map((t) => (
+                      <button
+                        key={t.value}
+                        onClick={() => setAnalyticsTimeline(t.value)}
+                        className={`px-3 py-1.5 text-sm font-medium rounded-lg transition-colors whitespace-nowrap ${analyticsTimeline === t.value ? "bg-white/10 text-white" : "text-white/40 hover:text-white/80"}`}
+                      >
+                        {t.label}
+                      </button>
+                    ))}
+                    <div className="flex items-center gap-1 ml-2">
+                       <input 
+                         type="number" 
+                         value={analyticsTimeline !== "all" && !["1", "7", "30"].includes(analyticsTimeline) ? analyticsTimeline : ""} 
+                         onChange={(e) => {
+                           const val = e.target.value;
+                           if (val) setAnalyticsTimeline(val);
+                           else setAnalyticsTimeline("all");
+                         }}
+                         placeholder="Custom"
+                         className="w-20 glass-input px-2 py-1.5 rounded-lg text-sm bg-white/5 border-white/10 focus:border-white/30 outline-none text-white text-center"
+                         min="1"
+                       />
+                       <span className="text-white/40 text-sm">Days</span>
+                    </div>
+                </div>
+              </div>
+
+              {(() => {
+                const completedOrders = orders.filter(o => o.status === "completed").filter((o) => {
+                  if (analyticsTimeline === "all") return true;
+                  const days = parseInt(analyticsTimeline);
+                  const orderTime = new Date(o.date).getTime();
+                  return (now - orderTime) <= days * 24 * 60 * 60 * 1000;
+                });
+                
+                let totalRevenue = 0;
+                let totalProfit = 0;
+                let totalItemsSold = 0;
+                const itemStats: Record<string, {name: string, quantity: number, revenue: number, profit: number}> = {};
+
+                completedOrders.forEach(o => {
+                  const finalTotal = Math.max(0, o.total - (o.pointsUsed || 0) - (o.prepaidDiscount || 0));
+                  totalRevenue += finalTotal;
+                  
+                  let orderCost = 0;
+                  o.items.forEach(item => {
+                    totalItemsSold += item.quantity;
+                    const cost = costPrices[item.id] || 0;
+                    const itemTotalCost = cost * item.quantity;
+                    orderCost += itemTotalCost;
+
+                    if (!itemStats[item.id]) {
+                      itemStats[item.id] = { name: item.name, quantity: 0, revenue: 0, profit: 0 };
+                    }
+                    itemStats[item.id].quantity += item.quantity;
+                    const itemRevenueShare = o.total > 0 ? (item.price * item.quantity) / o.total : 0; // Rough estimate of its contribution to finalTotal
+                    const itemRevenue = finalTotal * itemRevenueShare;
+
+                    itemStats[item.id].revenue += itemRevenue;
+                    itemStats[item.id].profit += (itemRevenue - itemTotalCost);
+                  });
+
+                  totalProfit += Math.max(0, finalTotal - orderCost);
+                });
+
+                const allItemsData = Object.values(itemStats)
+                  .sort((a, b) => b.quantity - a.quantity);
+
+                return (
+                  <div className="space-y-6">
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                      <div className="glass-panel p-6 rounded-3xl border border-white/10">
+                        <div className="text-white/50 text-sm mb-1 uppercase tracking-wider">Total Revenue</div>
+                        <div className="text-3xl font-bold text-pink-400">₹{totalRevenue.toFixed(2)}</div>
+                      </div>
+                      <div className="glass-panel p-6 rounded-3xl border border-white/10">
+                        <div className="text-white/50 text-sm mb-1 uppercase tracking-wider">Lifetime Profit</div>
+                        <div className="text-3xl font-bold text-emerald-400">₹{totalProfit.toFixed(2)}</div>
+                      </div>
+                      <div className="glass-panel p-6 rounded-3xl border border-white/10">
+                        <div className="text-white/50 text-sm mb-1 uppercase tracking-wider">Items Sold</div>
+                        <div className="text-3xl font-bold text-indigo-400">{totalItemsSold}</div>
+                      </div>
+                    </div>
+
+                    <div className="glass-panel p-6 rounded-3xl border border-white/10">
+                      <h3 className="text-lg font-bold mb-6">Quantity Sold per Item</h3>
+                      <div className="h-72">
+                        <ResponsiveContainer width="100%" height="100%">
+                          <BarChart data={allItemsData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                            <CartesianGrid strokeDasharray="3 3" stroke="#ffffff20" vertical={false} />
+                            <XAxis dataKey="name" stroke="#ffffff50" fontSize={12} tickLine={false} axisLine={false} />
+                            <YAxis stroke="#ffffff50" fontSize={12} tickLine={false} axisLine={false} />
+                            <RechartsTooltip 
+                              cursor={{ fill: '#ffffff10' }}
+                              contentStyle={{ backgroundColor: '#111', borderColor: '#333', borderRadius: '12px' }}
+                              itemStyle={{ color: '#fff' }}
+                            />
+                            <Bar dataKey="quantity" fill="#818cf8" radius={[4, 4, 0, 0]} name="Quantity Sold" />
+                          </BarChart>
+                        </ResponsiveContainer>
+                      </div>
+                    </div>
+
+                    <div className="glass-panel p-6 rounded-3xl border border-white/10">
+                      <h3 className="text-lg font-bold mb-6">Profit by Item</h3>
+                      <div className="h-72">
+                        <ResponsiveContainer width="100%" height="100%">
+                          <BarChart data={allItemsData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                            <CartesianGrid strokeDasharray="3 3" stroke="#ffffff20" vertical={false} />
+                            <XAxis dataKey="name" stroke="#ffffff50" fontSize={12} tickLine={false} axisLine={false} />
+                            <YAxis stroke="#ffffff50" fontSize={12} tickLine={false} axisLine={false} />
+                            <RechartsTooltip 
+                              cursor={{ fill: '#ffffff10' }}
+                              contentStyle={{ backgroundColor: '#111', borderColor: '#333', borderRadius: '12px' }}
+                              itemStyle={{ color: '#fff' }}
+                              formatter={(value: number) => [`₹${value.toFixed(2)}`, 'Profit']}
+                            />
+                            <Bar dataKey="profit" fill="#10b981" radius={[4, 4, 0, 0]} name="Profit" />
+                          </BarChart>
+                        </ResponsiveContainer>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
+            </motion.div>
+          )}
           {activeTab === "payment" && (
             <motion.div
               initial={{ opacity: 0, y: 10 }}

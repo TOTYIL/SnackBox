@@ -166,8 +166,13 @@ export const OrderTracker: React.FC<OrderTrackerProps> = ({
                             </div>
                             <div className="flex flex-col items-end gap-2">
                               <span className="font-black text-transparent bg-clip-text bg-gradient-to-r from-pink-400 to-indigo-400 text-lg">
-                                ₹{order.total}
+                                ₹{Math.max(0, order.total - (order.pointsUsed || 0) - (order.prepaidDiscount || 0)).toFixed(2)}
                               </span>
+                              {order.pointsUsed || order.prepaidDiscount ? (
+                                <div className="text-[10px] text-emerald-400 font-bold bg-emerald-500/10 px-2 py-0.5 rounded-full whitespace-nowrap">
+                                  Discount Applied
+                                </div>
+                              ) : null}
                               {order.status === "completed" &&
                                 (clearingIds[order.id] ? (
                                   <button

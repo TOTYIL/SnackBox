@@ -10,6 +10,7 @@ import {
   Award,
 } from "lucide-react";
 import QRCode from "react-qr-code";
+import confetti from "canvas-confetti";
 
 interface CheckoutModalProps {
   isOpen: boolean;
@@ -49,24 +50,21 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
 
   const [usePoints, setUsePoints] = useState(false);
   const pointsToRedeem =
-    usePoints && cravePoints >= 1 ? Math.min(total, cravePoints) : 0;
-  const finalTotal = total - pointsToRedeem;
+    usePoints && cravePoints > 0 ? cravePoints : 0;
+  const finalTotal = Math.max(0, total - pointsToRedeem);
   const discountAmount = Math.min(0.5, cartTotalItems * 0.1);
   const prepaidTotal = Math.max(0, finalTotal - discountAmount);
 
   const upiLink = `upi://pay?pa=${encodeURIComponent(upiId.trim())}&pn=${encodeURIComponent("SnackBox")}&tn=${encodeURIComponent(`Order Code: ${paymentCode}`)}&am=${prepaidTotal.toFixed(2)}&cu=INR`;
 
   // Form State
-  const [name, setName] = useState("");
-  const [phone, setPhone] = useState("");
-  const [room, setRoom] = useState("");
+  const [name, setName] = useState(() => localStorage.getItem("snackbox_name") || "");
+  const [phone, setPhone] = useState(() => localStorage.getItem("snackbox_phone") || "");
+  const [room, setRoom] = useState(() => localStorage.getItem("snackbox_room") || "");
 
   useEffect(() => {
     if (isOpen) {
       setStep("details");
-      setName("");
-      setPhone("");
-      setRoom("");
       setUsePoints(false);
 
       const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
@@ -81,6 +79,10 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
   const handleProceedToMethod = (e: React.FormEvent) => {
     e.preventDefault();
     if (name && phone && room) {
+      localStorage.setItem("snackbox_name", name);
+      localStorage.setItem("snackbox_phone", phone);
+      localStorage.setItem("snackbox_room", room);
+
       if (finalTotal <= 0) {
         // Fully paid with points!
         handleFinish("prepaid");
@@ -90,17 +92,74 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
     }
   };
 
+  const playSuccessChime = () => {
+    try {
+      const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
+      if (!AudioContext) return;
+      const ctx = new AudioContext();
+
+      const playNote = (freq: number, startTime: number, duration: number, vol = 0.5) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.type = "sine"; // pure sine wave
+        osc.frequency.setValueAtTime(freq, ctx.currentTime);
+        
+        gain.gain.setValueAtTime(0, startTime);
+        gain.gain.linearRampToValueAtTime(vol, startTime + 0.01); // sharp mallet-like attack
+        gain.gain.exponentialRampToValueAtTime(0.001, startTime + duration); // fast decay
+        
+        osc.start(startTime);
+        osc.stop(startTime + duration);
+      };
+
+      const now = ctx.currentTime;
+      // F6, A6, C7 triad, rapid 32nd-note feel
+      playNote(1396.91, now, 0.15, 0.4);         // F6
+      playNote(1760.00, now + 0.1, 0.15, 0.4);  // A6
+      playNote(2093.00, now + 0.2, 0.4, 0.4);   // C7 (slightly longer ring for completion)
+    } catch (e) {
+      console.error("Failed to play chime", e);
+    }
+  };
+
   const handleFinish = (method: "cod" | "prepaid") => {
+    playSuccessChime();
     setStep("success");
+    const duration = 3000; // longer duration for a demure fall
+    const end = Date.now() + duration;
+
+    const frame = () => {
+      // Demure top-to-bottom fall (like snow, but with confetti colors)
+      confetti({
+        particleCount: 5,
+        angle: 270,
+        spread: 90,
+        origin: { x: Math.random(), y: -0.1 },
+        startVelocity: 15,
+        gravity: 0.4,
+        scalar: 0.8,
+        ticks: 300,
+      });
+
+      if (Date.now() < end) {
+        requestAnimationFrame(frame);
+      }
+    };
+    frame();
+    
+    onComplete({
+      name,
+      phone,
+      room,
+      id: paymentCode,
+      paymentMethod: method,
+      pointsUsed: pointsToRedeem,
+    }); // Send DB request immediately so it processes in background
+
     setTimeout(() => {
-      onComplete({
-        name,
-        phone,
-        room,
-        id: paymentCode,
-        paymentMethod: method,
-        pointsUsed: pointsToRedeem,
-      }); // Closes modal and clears cart
+      onClose(); // Close modal after confetti completes
     }, 2500);
   };
 
@@ -193,13 +252,13 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
 
                   <div className="pt-4 border-t border-white/10 mt-6 relative">
                     <label
-                      className={`flex items-start gap-3 p-4 mb-4 rounded-2xl border transition-colors group ${cravePoints >= 1 ? "bg-white/5 border-white/10 cursor-pointer hover:bg-white/10" : "bg-black/20 border-white/5 opacity-80 cursor-not-allowed"}`}
+                      className={`flex items-start gap-3 p-4 mb-4 rounded-2xl border transition-colors group ${cravePoints > 0 ? "bg-white/5 border-white/10 cursor-pointer hover:bg-white/10" : "bg-black/20 border-white/5 opacity-80 cursor-not-allowed"}`}
                     >
                       <div className="pt-0.5">
                         <input
                           type="checkbox"
                           checked={usePoints}
-                          disabled={cravePoints < 1}
+                          disabled={cravePoints <= 0}
                           onChange={(e) => setUsePoints(e.target.checked)}
                           className="w-5 h-5 rounded border-white/20 bg-black/50 text-pink-500 focus:ring-pink-500 focus:ring-offset-gray-900 disabled:opacity-50 disabled:cursor-not-allowed"
                         />
@@ -209,27 +268,27 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
                           <Award
                             size={18}
                             className={
-                              cravePoints >= 1
+                              cravePoints > 0
                                 ? "text-yellow-400"
                                 : "text-yellow-400/50"
                             }
                           />
                           <span
-                            className={`font-bold transition-colors ${cravePoints >= 1 ? "text-white group-hover:text-pink-300" : "text-white/60"}`}
+                            className={`font-bold transition-colors ${cravePoints > 0 ? "text-white group-hover:text-pink-300" : "text-white/60"}`}
                           >
                             Use Crave Candy
                           </span>
                         </div>
                         <p className="text-xs text-white/50">
                           Balance: ₹{cravePoints.toFixed(2)}
-                          {cravePoints < 1 ? (
+                          {cravePoints <= 0 ? (
                             <span className="block text-white/40 mt-1">
-                              Minimum 1 point required to redeem
+                              No points available
                             </span>
                           ) : (
                             usePoints && (
                               <span className="block text-pink-400 mt-1">
-                                Applying ₹{pointsToRedeem.toFixed(2)} discount
+                                Deducting ₹{pointsToRedeem.toFixed(2)} from balance
                               </span>
                             )
                           )}

@@ -159,6 +159,7 @@ export default function App() {
         .map((o) => {
           let actualRoom = o.room;
           let paymentMethod: "cod" | "prepaid" | undefined = undefined;
+          let pointsUsed = 0;
           // Try to read from payment_method column if it exists!
           if (o.payment_method) {
             paymentMethod = o.payment_method;
@@ -166,6 +167,9 @@ export default function App() {
             const parts = o.room.split("||");
             actualRoom = parts[0];
             paymentMethod = parts[1] as "cod" | "prepaid";
+            if (parts.length > 2 && parts[2].startsWith("P:")) {
+              pointsUsed = Number(parts[2].substring(2));
+            }
           }
 
           // Default to cod if missing
@@ -179,21 +183,30 @@ export default function App() {
             statusToUse = recent.status as Order["status"];
           }
 
+          const items = o.order_items.map((oi: any) => ({
+            id: oi.product_id,
+            name: oi.name,
+            price: Number(oi.price),
+            quantity: oi.quantity,
+          }));
+
+          const cartTotalItems = items.reduce((acc: number, item: any) => acc + item.quantity, 0);
+          const prepaidDiscount = paymentMethod === "prepaid" ? Math.min(0.5, cartTotalItems * 0.1) : 0;
+          const cravePointsDisabled = o.crave_points_disabled === true || (typeof o.room === "string" && o.room.includes("||C:NO"));
+
           return {
             id: o.id,
             customerName: o.customer_name,
             phone: o.phone,
             room: actualRoom,
             paymentMethod,
+            pointsUsed,
+            prepaidDiscount,
+            cravePointsDisabled,
             date: o.date,
             total: Number(o.total),
             status: statusToUse,
-            items: o.order_items.map((oi: any) => ({
-              id: oi.product_id,
-              name: oi.name,
-              price: Number(oi.price),
-              quantity: oi.quantity,
-            })),
+            items,
           };
         });
       setOrders((prev) => {
@@ -412,17 +425,25 @@ export default function App() {
   const cravePoints = useMemo(() => {
     let earned = 0;
     let used = 0;
+    const RESET_DATE = new Date("2026-05-08T15:00:00Z").getTime();
+    
     orders.forEach((o) => {
-      // Points earned from completed orders
-      if (o.status === "completed") {
-        earned += (o.total / 1.1) * 0.02;
+      // Refresh everyone's points to 0 by ignoring old orders
+      if (new Date(o.date).getTime() < RESET_DATE) {
+        return;
       }
-      // Points used in any non-rejected order
+
+      let pointsUsedInOrder = o.pointsUsed || 0;
+      
       if (o.status !== "rejected" && o.status !== "rage_blocked") {
-        const match = o.room.match(/\|\|P:([\d.]+)/);
-        if (match) {
-          used += parseFloat(match[1]);
-        }
+        used += pointsUsedInOrder;
+      }
+
+      // Do not earn any crave candies at the order they used a discount at
+      // Also respect the disabled toggle from DevPage
+      if (o.status === "completed" && !o.cravePointsDisabled && pointsUsedInOrder === 0) {
+        // Earn .01 per 5 spent
+        earned += Math.floor(o.total / 5) * 0.01;
       }
     });
     return Math.max(0, earned - used);
@@ -470,15 +491,10 @@ export default function App() {
     if (
       customerData.pointsUsed &&
       customerData.pointsUsed > 0 &&
-      cravePoints >= 1
+      cravePoints > 0
     ) {
-      actualPointsUsed = Math.min(
-        orderTotal,
-        cravePoints,
-        customerData.pointsUsed,
-      );
-      orderTotal -= actualPointsUsed;
-      orderTotal = Math.max(0, orderTotal);
+      actualPointsUsed = cravePoints;
+      orderTotal -= Math.min(orderTotal, actualPointsUsed);
     }
 
     if (customerData.paymentMethod === "prepaid") {
@@ -504,26 +520,14 @@ export default function App() {
       status: "pending",
     };
 
-    // Update local state first to feel fast
-    setOrders((prev) => [newOrder, ...prev]);
-
-    // Do NOT Deduct stock here. Wait until order is accepted.
-    setProductsList((prevProducts) => [...prevProducts]);
-
-    setCartItems([]);
-    setIsCheckoutOpen(false);
-
-    // Set for session tracking
-    setIsTrackerOpen(true);
-
-    // Sync to Supabase
+    // Sync to Supabase FIRST, then update optimistic UI state
     if (supabase && currentUser) {
       const roomString =
         newOrder.room +
         (customerData.paymentMethod ? "||" + customerData.paymentMethod : "") +
         (actualPointsUsed > 0 ? "||P:" + actualPointsUsed.toFixed(2) : "");
 
-      await supabase.from("orders").insert({
+      const { error: orderError } = await supabase.from("orders").insert({
         id: newOrder.id,
         customer_name: newOrder.customerName,
         phone: newOrder.phone,
@@ -534,7 +538,12 @@ export default function App() {
         user_id: currentUser.id,
       });
 
-      await supabase.from("order_items").insert(
+      if (orderError) {
+        console.error("Order creation failed:", orderError);
+        return; // Stop here, do not clear cart
+      }
+
+      const { error: itemsError } = await supabase.from("order_items").insert(
         newOrder.items.map((item) => ({
           order_id: newOrder.id,
           product_id: item.id,
@@ -544,9 +553,28 @@ export default function App() {
         })),
       );
 
-      // Do NOT Deduct stock in DB yet. Wait until accept.
-      // for (const item of newOrder.items) { ... }
+      if (itemsError) {
+        console.error("Order items creation failed:", itemsError);
+        // Rollback real quick
+        await supabase.from("orders").delete().eq("id", newOrder.id);
+        return; // Stop here, do not clear cart
+      }
     }
+
+    // Now safe to update local state
+    setOrders((prev) => {
+      // Prevent duplicates in local state
+      if (prev.some(o => o.id === newOrder.id)) return prev;
+      return [newOrder, ...prev]
+    });
+
+    // Do NOT Deduct stock here. Wait until order is accepted.
+    setProductsList((prevProducts) => [...prevProducts]);
+
+    setCartItems([]);
+    
+    // Set for session tracking
+    setIsTrackerOpen(true);
   };
 
   const deleteOrder = async (orderId: string) => {
@@ -680,14 +708,6 @@ export default function App() {
   const trackedOrders = useMemo(() => {
     return orders.filter((o) => {
       if (dismissedOrderIds.includes(o.id)) return false;
-      if (
-        o.status === "completed" ||
-        o.status === "rejected" ||
-        o.status === "rage_blocked"
-      ) {
-        const orderTime = new Date(o.date).getTime();
-        if (Date.now() - orderTime > 30 * 60 * 1000) return false;
-      }
       return true;
     });
   }, [orders, dismissedOrderIds]);
@@ -980,7 +1000,7 @@ export default function App() {
               &copy; {new Date().getFullYear()} SnackBox Inc.
             </div>
             <div className="w-1 h-1 rounded-full bg-white/20" />
-            <div className="text-white/40">v1.2.08</div>
+            <div className="text-white/40">v1.2.09</div>
           </div>
         </div>
       </footer>
