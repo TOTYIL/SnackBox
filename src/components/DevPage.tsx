@@ -53,10 +53,15 @@ export const DevPage: React.FC<DevPageProps> = ({
   const [orders, setOrders] = useState<Order[]>([]);
   const [localProducts, setLocalProducts] = useState([...products]);
   const [costPrices, setCostPrices] = useState<Record<string, any>>({});
+  const [lowStockThresholds, setLowStockThresholds] = useState<Record<string, number>>({});
   const [localQr, setLocalQr] = useState(upiId);
   const [activeTab, setActiveTab] = useState<
     "orders" | "inventory" | "payment" | "analytics"
   >("orders");
+  const [analyticsView, setAnalyticsView] = useState<
+    "overview" | "revenue" | "profit" | "items" | "users" | "low_stock"
+  >("overview");
+  const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null);
 
   useEffect(() => {
     if (supabase) {
@@ -68,9 +73,18 @@ export const DevPage: React.FC<DevPageProps> = ({
           } catch(e) {}
         }
       });
+      supabase.from("payment_config").select("qr_code_url").eq("id", "low_stock_thresholds").single().then(({data}) => {
+        if (data && data.qr_code_url) {
+          try {
+            const parsed = JSON.parse(data.qr_code_url);
+            setLowStockThresholds(parsed);
+          } catch(e) {}
+        }
+      });
     }
   }, [supabase]);
   const [editingItemId, setEditingItemId] = useState<string | null>(null);
+  const [newlyAddedIds, setNewlyAddedIds] = useState<Record<string, boolean>>({});
   const [clearingIds, setClearingIds] = useState<Record<string, boolean>>({});
   const timeoutRefs = useRef<Record<string, NodeJS.Timeout>>({});
 
@@ -162,7 +176,11 @@ export const DevPage: React.FC<DevPageProps> = ({
           }
 
           let statusToUse = o.status;
-          if (!statusToUse) {
+          
+          const recent = recentlyUpdatedOrdersRef.current[o.id];
+          if (recent && Date.now() - recent.timestamp < 10000) {
+            statusToUse = recent.status;
+          } else if (!statusToUse) {
             const a = Date.now() - new Date(o.date).getTime();
             statusToUse = a > 15 * 60 * 1000 ? "unanswered" : "pending";
           }
@@ -180,6 +198,7 @@ export const DevPage: React.FC<DevPageProps> = ({
 
           return {
             id: o.id,
+            userId: o.user_id,
             customerName: o.customer_name,
             room: actualRoom,
             dbRoom: o.room,
@@ -235,21 +254,30 @@ export const DevPage: React.FC<DevPageProps> = ({
         prev.map((o) => (o.id === orderId ? { ...o, status } : o)),
       );
 
-      // Sync to Supabase immediately
+      // Sync to Supabase in the background
       if (supabase) {
-        const { error } = await supabase
+        supabase
           .from("orders")
           .update({ status })
-          .eq("id", orderId);
-        if (error) console.error("Error updating order status:", error);
+          .eq("id", orderId)
+          .then(({ error }) => {
+            if (error) {
+              console.error("Error updating order status:", error);
+              // Revert
+              delete recentlyUpdatedOrdersRef.current[orderId];
+              setOrders((prev) =>
+                prev.map((o) => (o.id === orderId ? { ...o, status: actualOldStatus } : o)),
+              );
+            }
+          });
       }
 
       // Handle stock changes
       const doUpdateStock = async (
         changes: { id: string; delta: number }[],
       ) => {
-        setProducts(
-          products.map((p) => {
+        setProducts((prev) =>
+          prev.map((p) => {
             const change = changes.find((c) => c.id === p.id);
             if (change)
               return { ...p, stock: Math.max(0, p.stock + change.delta) };
@@ -257,19 +285,23 @@ export const DevPage: React.FC<DevPageProps> = ({
           }),
         );
         if (supabase) {
-          for (const change of changes) {
-            const { data, error } = await supabase
-              .from("products")
-              .select("stock")
-              .eq("id", change.id)
-              .single();
-            if (error) console.error("Error fetching product stock:", error);
-            if (data && data.stock !== undefined) {
-              await supabase
+          try {
+            for (const change of changes) {
+              const { data, error } = await supabase
                 .from("products")
-                .update({ stock: Math.max(0, data.stock + change.delta) })
-                .eq("id", change.id);
+                .select("stock")
+                .eq("id", change.id)
+                .single();
+              if (error) console.error("Error fetching product stock:", error);
+              if (data && data.stock !== undefined) {
+                await supabase
+                  .from("products")
+                  .update({ stock: Math.max(0, data.stock + change.delta) })
+                  .eq("id", change.id);
+              }
             }
+          } catch (e) {
+            console.error("Stock update error:", e);
           }
         }
       };
@@ -286,7 +318,7 @@ export const DevPage: React.FC<DevPageProps> = ({
             id: item.id,
             delta: -item.quantity,
           })),
-        ).catch(console.error);
+        );
       } else if (oldDeducted && !newDeducted) {
         // Transitioned to Pending/Rejected: Restore Stock
         doUpdateStock(
@@ -294,10 +326,11 @@ export const DevPage: React.FC<DevPageProps> = ({
             id: item.id,
             delta: item.quantity,
           })),
-        ).catch(console.error);
+        );
       }
     } finally {
-      processingOrdersRef.current.delete(orderId);
+      // Free it up immediately so they can click again if needed
+      setTimeout(() => processingOrdersRef.current.delete(orderId), 100);
     }
   };
 
@@ -592,6 +625,7 @@ export const DevPage: React.FC<DevPageProps> = ({
 
   const handleSaveSingleProduct = async (id: string) => {
     setEditingItemId(null);
+    setNewlyAddedIds(prev => { const updated = { ...prev }; delete updated[id]; return updated; });
     if (!supabase) return;
     const p = localProducts.find((prod) => prod.id === id);
     if (p) {
@@ -612,11 +646,16 @@ export const DevPage: React.FC<DevPageProps> = ({
         id: "cost_prices",
         qr_code_url: JSON.stringify(updatedCostPrices),
       });
+      await supabase.from("payment_config").upsert({
+        id: "low_stock_thresholds",
+        qr_code_url: JSON.stringify(lowStockThresholds),
+      });
     }
   };
 
   const handleAddProduct = () => {
     const newId = `p${Date.now()}`;
+    setNewlyAddedIds(prev => ({ ...prev, [newId]: true }));
     const newProd: Product = {
       id: newId,
       name: "New Snack",
@@ -638,6 +677,7 @@ export const DevPage: React.FC<DevPageProps> = ({
     setLocalProducts(updated);
     setProducts(updated);
     setEditingItemId(null);
+    setNewlyAddedIds(prev => { const upd = { ...prev }; delete upd[id]; return upd; });
     if (supabase) {
       // First try to delete
       const { error } = await supabase.from("products").delete().eq("id", id);
@@ -677,6 +717,11 @@ export const DevPage: React.FC<DevPageProps> = ({
     await supabase.from("payment_config").upsert({
       id: "cost_prices",
       qr_code_url: JSON.stringify(updatedCostPrices),
+    });
+    
+    await supabase.from("payment_config").upsert({
+      id: "low_stock_thresholds",
+      qr_code_url: JSON.stringify(lowStockThresholds),
     });
   };
 
@@ -1381,10 +1426,18 @@ export const DevPage: React.FC<DevPageProps> = ({
               </div>
 
               <div className="columns-1 md:columns-2 lg:columns-3 gap-4">
-                {localProducts.map((product) => (
+                {[...localProducts]
+                  .sort((a, b) => {
+                    const aIsNewEditing = a.id === editingItemId && newlyAddedIds[a.id];
+                    const bIsNewEditing = b.id === editingItemId && newlyAddedIds[b.id];
+                    if (aIsNewEditing && !bIsNewEditing) return -1;
+                    if (bIsNewEditing && !aIsNewEditing) return 1;
+                    return (a.name || "").localeCompare(b.name || "");
+                  })
+                  .map((product) => (
                   <div
                     key={product.id}
-                    className={`glass-panel p-4 rounded-3xl border transition-all mb-4 break-inside-avoid ${editingItemId === product.id ? "border-indigo-400 bg-white/10" : "border-white/10"}`}
+                    className={`glass-panel p-4 rounded-3xl border transition-all break-inside-avoid inline-block w-full mb-4 ${editingItemId === product.id ? "border-indigo-400 bg-white/10" : "border-white/10"}`}
                   >
                     {editingItemId !== product.id ? (
                       // Display Mode Card
@@ -1405,10 +1458,13 @@ export const DevPage: React.FC<DevPageProps> = ({
                             <div className="text-xs">
                               <span className="text-white/60 mr-1">Stock:</span>
                               <span
-                                className={`font-bold ${product.stock === 0 ? "text-red-400" : "text-green-400"}`}
+                                className={`font-bold ${product.stock === 0 ? "text-red-400" : (product.stock <= (lowStockThresholds[product.id] || 0) ? "text-amber-400" : "text-green-400")}`}
                               >
                                 {product.stock}
                               </span>
+                              {product.stock > 0 && product.stock <= (lowStockThresholds[product.id] || 0) && (
+                                <span className="text-[10px] bg-amber-500/20 text-amber-300 ml-2 px-1.5 py-0.5 rounded-full font-semibold">Low Stock</span>
+                              )}
                             </div>
                             <button
                               onClick={() => setEditingItemId(product.id)}
@@ -1460,9 +1516,9 @@ export const DevPage: React.FC<DevPageProps> = ({
                             className="glass-input w-full p-2.5 rounded-xl text-sm"
                           />
                         </div>
-                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 items-end">
                           <div>
-                            <label className="text-[10px] uppercase tracking-wider text-white/50 ml-1">
+                            <label className="text-[10px] uppercase tracking-wider text-white/50 ml-1 mb-1 block">
                               Price (₹)
                             </label>
                             <input
@@ -1479,8 +1535,8 @@ export const DevPage: React.FC<DevPageProps> = ({
                             />
                           </div>
                           <div>
-                            <label className="text-[10px] uppercase tracking-wider text-indigo-400 ml-1">
-                              Cost (₹) (Dev Only)
+                            <label className="text-[10px] uppercase tracking-wider text-white/50 ml-1 mb-1 block">
+                              Cost (₹)
                             </label>
                             <input
                               type="number"
@@ -1495,7 +1551,24 @@ export const DevPage: React.FC<DevPageProps> = ({
                             />
                           </div>
                           <div>
-                            <label className="text-[10px] uppercase tracking-wider text-white/50 ml-1">
+                            <label className="text-[10px] uppercase tracking-wider text-white/50 ml-1 mb-1 block">
+                              Alert Threshold
+                            </label>
+                            <input
+                              type="number"
+                              value={lowStockThresholds[product.id] === undefined ? "" : lowStockThresholds[product.id]}
+                              onChange={(e) =>
+                                setLowStockThresholds(prev => ({
+                                  ...prev,
+                                  [product.id]: parseInt(e.target.value) || 0
+                                }))
+                              }
+                              className="glass-input w-full p-2.5 rounded-xl text-sm"
+                              placeholder="e.g. 5"
+                            />
+                          </div>
+                          <div>
+                            <label className="text-[10px] uppercase tracking-wider text-white/50 ml-1 mb-1 block">
                               Stock Amount
                             </label>
                             <input
@@ -1578,10 +1651,10 @@ export const DevPage: React.FC<DevPageProps> = ({
               className="space-y-6"
             >
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
-                <h2 className="text-2xl flex items-center font-semibold">
+                <h2 className="text-2xl flex items-center font-semibold shrink-0">
                    Analytics
                 </h2>
-                <div className="flex gap-2 bg-black/20 p-1.5 rounded-xl self-start sm:self-auto overflow-x-auto items-center">
+                <div className="flex flex-wrap gap-2 bg-black/20 p-1.5 rounded-xl self-start sm:self-auto max-w-full items-center">
                     {[
                       { value: "all", label: "All Time" },
                       { value: "1", label: "24h" },
@@ -1625,13 +1698,48 @@ export const DevPage: React.FC<DevPageProps> = ({
                 let totalRevenue = 0;
                 let totalProfit = 0;
                 let totalItemsSold = 0;
-                const itemStats: Record<string, {name: string, quantity: number, revenue: number, profit: number}> = {};
+                const itemStats: Record<string, {id: string, name: string, quantity: number, revenue: number, profit: number}> = {};
+                const customerStats: Record<string, {
+                  id: string;
+                  name: string;
+                  phone: string;
+                  room: string;
+                  totalSpent: number;
+                  profit: number;
+                  ordersCount: number;
+                  itemsCount: number;
+                  products: Record<string, number>;
+                  hours: Record<number, number>;
+                }> = {};
 
                 completedOrders.forEach(o => {
                   const finalTotal = Math.max(0, o.total - (o.pointsUsed || 0) - (o.prepaidDiscount || 0));
                   totalRevenue += finalTotal;
                   
                   let orderCost = 0;
+                  const orderIdentifier = o.userId || o.phone || o.customerName || "Unknown";
+                  if (!customerStats[orderIdentifier]) {
+                    customerStats[orderIdentifier] = {
+                      id: orderIdentifier,
+                      name: o.customerName || "Unknown",
+                      phone: o.phone || "N/A",
+                      room: o.room || "N/A",
+                      totalSpent: 0,
+                      profit: 0,
+                      ordersCount: 0,
+                      itemsCount: 0,
+                      products: {},
+                      hours: {}
+                    };
+                  }
+                  
+                  const cStat = customerStats[orderIdentifier];
+                  cStat.totalSpent += finalTotal;
+                  cStat.ordersCount += 1;
+                  const orderDate = new Date(o.date);
+                  const hour = orderDate.getHours();
+                  cStat.hours[hour] = (cStat.hours[hour] || 0) + 1;
+
                   o.items.forEach(item => {
                     totalItemsSold += item.quantity;
                     const cost = costPrices[item.id] || 0;
@@ -1639,7 +1747,7 @@ export const DevPage: React.FC<DevPageProps> = ({
                     orderCost += itemTotalCost;
 
                     if (!itemStats[item.id]) {
-                      itemStats[item.id] = { name: item.name, quantity: 0, revenue: 0, profit: 0 };
+                      itemStats[item.id] = { id: item.id, name: item.name, quantity: 0, revenue: 0, profit: 0 };
                     }
                     itemStats[item.id].quantity += item.quantity;
                     const itemRevenueShare = o.total > 0 ? (item.price * item.quantity) / o.total : 0; // Rough estimate of its contribution to finalTotal
@@ -1647,69 +1755,307 @@ export const DevPage: React.FC<DevPageProps> = ({
 
                     itemStats[item.id].revenue += itemRevenue;
                     itemStats[item.id].profit += (itemRevenue - itemTotalCost);
+                    
+                    cStat.itemsCount += item.quantity;
+                    cStat.products[item.name] = (cStat.products[item.name] || 0) + item.quantity;
                   });
 
-                  totalProfit += Math.max(0, finalTotal - orderCost);
+                  const orderProfit = Math.max(0, finalTotal - orderCost);
+                  totalProfit += orderProfit;
+                  cStat.profit += orderProfit;
                 });
 
                 const allItemsData = Object.values(itemStats)
                   .sort((a, b) => b.quantity - a.quantity);
+                const allCustomersData = Object.values(customerStats)
+                  .sort((a, b) => b.totalSpent - a.totalSpent);
 
                 return (
                   <div className="space-y-6">
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                      <div className="glass-panel p-6 rounded-3xl border border-white/10">
-                        <div className="text-white/50 text-sm mb-1 uppercase tracking-wider">Total Revenue</div>
-                        <div className="text-3xl font-bold text-pink-400">₹{totalRevenue.toFixed(2)}</div>
-                      </div>
-                      <div className="glass-panel p-6 rounded-3xl border border-white/10">
-                        <div className="text-white/50 text-sm mb-1 uppercase tracking-wider">Lifetime Profit</div>
-                        <div className="text-3xl font-bold text-emerald-400">₹{totalProfit.toFixed(2)}</div>
-                      </div>
-                      <div className="glass-panel p-6 rounded-3xl border border-white/10">
-                        <div className="text-white/50 text-sm mb-1 uppercase tracking-wider">Items Sold</div>
-                        <div className="text-3xl font-bold text-indigo-400">{totalItemsSold}</div>
-                      </div>
-                    </div>
+                    {analyticsView !== "overview" && (
+                      <button
+                        onClick={() => setAnalyticsView("overview")}
+                        className="flex items-center gap-2 text-white/50 hover:text-white transition-colors text-sm font-medium"
+                      >
+                        <ArrowLeft size={16} /> Back to Overview
+                      </button>
+                    )}
 
-                    <div className="glass-panel p-6 rounded-3xl border border-white/10">
-                      <h3 className="text-lg font-bold mb-6">Quantity Sold per Item</h3>
-                      <div className="h-72">
-                        <ResponsiveContainer width="100%" height="100%">
-                          <BarChart data={allItemsData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-                            <CartesianGrid strokeDasharray="3 3" stroke="#ffffff20" vertical={false} />
-                            <XAxis dataKey="name" stroke="#ffffff50" fontSize={12} tickLine={false} axisLine={false} />
-                            <YAxis stroke="#ffffff50" fontSize={12} tickLine={false} axisLine={false} />
-                            <RechartsTooltip 
-                              cursor={{ fill: '#ffffff10' }}
-                              contentStyle={{ backgroundColor: '#111', borderColor: '#333', borderRadius: '12px' }}
-                              itemStyle={{ color: '#fff' }}
-                            />
-                            <Bar dataKey="quantity" fill="#818cf8" radius={[4, 4, 0, 0]} name="Quantity Sold" />
-                          </BarChart>
-                        </ResponsiveContainer>
+                    {analyticsView === "overview" && (
+                      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 lg:gap-6">
+                        <button
+                          onClick={() => setAnalyticsView("revenue")}
+                          className="glass-panel p-6 rounded-3xl border border-white/10 text-left hover:bg-white/5 transition-colors"
+                        >
+                          <div className="text-white/50 text-xs sm:text-sm mb-1 uppercase tracking-wider">Total Revenue</div>
+                          <div className="text-xl sm:text-3xl font-bold text-pink-400">₹{totalRevenue.toFixed(2)}</div>
+                        </button>
+                        <button
+                          onClick={() => setAnalyticsView("profit")}
+                          className="glass-panel p-6 rounded-3xl border border-white/10 text-left hover:bg-white/5 transition-colors"
+                        >
+                          <div className="text-white/50 text-xs sm:text-sm mb-1 uppercase tracking-wider">Lifetime Profit</div>
+                          <div className="text-xl sm:text-3xl font-bold text-emerald-400">₹{totalProfit.toFixed(2)}</div>
+                        </button>
+                        <button
+                          onClick={() => setAnalyticsView("items")}
+                          className="glass-panel p-6 rounded-3xl border border-white/10 text-left hover:bg-white/5 transition-colors"
+                        >
+                          <div className="text-white/50 text-xs sm:text-sm mb-1 uppercase tracking-wider">Items Sold</div>
+                          <div className="text-xl sm:text-3xl font-bold text-indigo-400">{totalItemsSold}</div>
+                        </button>
+                        <button
+                          onClick={() => setAnalyticsView("users")}
+                          className="glass-panel p-6 rounded-3xl border border-white/10 text-left hover:bg-white/5 transition-colors"
+                        >
+                          <div className="text-white/50 text-xs sm:text-sm mb-1 uppercase tracking-wider">Total Users</div>
+                          <div className="text-xl sm:text-3xl font-bold text-amber-400">{allCustomersData.length}</div>
+                        </button>
+                        <button
+                          onClick={() => setAnalyticsView("low_stock")}
+                          className="glass-panel p-6 rounded-3xl border border-white/10 text-left hover:bg-amber-500/10 transition-colors"
+                        >
+                          <div className="text-white/50 text-xs sm:text-sm mb-1 uppercase tracking-wider">Low Stock Alerts</div>
+                          <div className="text-xl sm:text-3xl font-bold text-red-400">{localProducts.filter(p => p.stock > 0 && p.stock <= (lowStockThresholds[p.id] || 0)).length}</div>
+                        </button>
                       </div>
-                    </div>
+                    )}
 
-                    <div className="glass-panel p-6 rounded-3xl border border-white/10">
-                      <h3 className="text-lg font-bold mb-6">Profit by Item</h3>
-                      <div className="h-72">
-                        <ResponsiveContainer width="100%" height="100%">
-                          <BarChart data={allItemsData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-                            <CartesianGrid strokeDasharray="3 3" stroke="#ffffff20" vertical={false} />
-                            <XAxis dataKey="name" stroke="#ffffff50" fontSize={12} tickLine={false} axisLine={false} />
-                            <YAxis stroke="#ffffff50" fontSize={12} tickLine={false} axisLine={false} />
-                            <RechartsTooltip 
-                              cursor={{ fill: '#ffffff10' }}
-                              contentStyle={{ backgroundColor: '#111', borderColor: '#333', borderRadius: '12px' }}
-                              itemStyle={{ color: '#fff' }}
-                              formatter={(value: number) => [`₹${value.toFixed(2)}`, 'Profit']}
-                            />
-                            <Bar dataKey="profit" fill="#10b981" radius={[4, 4, 0, 0]} name="Profit" />
-                          </BarChart>
-                        </ResponsiveContainer>
+                    {analyticsView === "revenue" && (
+                      <div className="glass-panel p-6 rounded-3xl border border-white/10 flex flex-col h-[600px]">
+                        <h3 className="text-lg font-bold mb-4">Revenue by Item</h3>
+                        <div className="flex-1 overflow-y-auto pr-2 space-y-2">
+                          {allItemsData.sort((a,b)=>b.revenue-a.revenue).map((item, i) => (
+                            <div key={item.id} className="flex justify-between items-center bg-white/5 p-4 rounded-xl border border-white/5">
+                              <div>
+                                <div className="font-semibold text-sm sm:text-base">{item.name}</div>
+                                <div className="text-xs text-white/50">{item.quantity} sold</div>
+                              </div>
+                              <div className="font-bold text-pink-400">₹{item.revenue.toFixed(2)}</div>
+                            </div>
+                          ))}
+                        </div>
+                        <div className="mt-4 pt-4 border-t border-white/10 flex justify-between items-center">
+                          <span className="text-white/50 uppercase tracking-wider text-sm">Total Revenue</span>
+                          <span className="text-2xl font-bold text-pink-400">₹{totalRevenue.toFixed(2)}</span>
+                        </div>
                       </div>
-                    </div>
+                    )}
+
+                    {analyticsView === "profit" && (
+                      <div className="space-y-6">
+                        <div className="glass-panel p-6 rounded-3xl border border-white/10">
+                          <h3 className="text-lg font-bold mb-6">Profit by Item</h3>
+                          <div className="h-72">
+                            <ResponsiveContainer width="100%" height="100%">
+                              <BarChart data={allItemsData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                                <CartesianGrid strokeDasharray="3 3" stroke="#ffffff20" vertical={false} />
+                                <XAxis dataKey="name" stroke="#ffffff50" fontSize={12} tickLine={false} axisLine={false} />
+                                <YAxis stroke="#ffffff50" fontSize={12} tickLine={false} axisLine={false} />
+                                <RechartsTooltip 
+                                  cursor={{ fill: '#ffffff10' }}
+                                  contentStyle={{ backgroundColor: '#111', borderColor: '#333', borderRadius: '12px' }}
+                                  itemStyle={{ color: '#fff' }}
+                                  formatter={(value: number) => [`₹${value.toFixed(2)}`, 'Profit']}
+                                />
+                                <Bar dataKey="profit" fill="#10b981" radius={[4, 4, 0, 0]} name="Profit" />
+                              </BarChart>
+                            </ResponsiveContainer>
+                          </div>
+                        </div>
+
+                        <div className="glass-panel p-6 rounded-3xl border border-white/10 flex flex-col h-[500px]">
+                          <h3 className="text-lg font-bold mb-4">Profit Breakdown</h3>
+                          <div className="flex-1 overflow-y-auto pr-2 space-y-2">
+                            {allItemsData.sort((a,b)=>b.profit-a.profit).map((item, i) => (
+                              <div key={item.id} className="flex justify-between items-center bg-white/5 p-4 rounded-xl border border-white/5">
+                                <div>
+                                  <div className="font-semibold text-sm sm:text-base">{item.name}</div>
+                                  <div className="text-xs text-white/50">{item.quantity} sold</div>
+                                </div>
+                                <div className="font-bold text-emerald-400">₹{item.profit.toFixed(2)}</div>
+                              </div>
+                            ))}
+                          </div>
+                          <div className="mt-4 pt-4 border-t border-white/10 flex justify-between items-center">
+                            <span className="text-white/50 uppercase tracking-wider text-sm">Lifetime Profit</span>
+                            <span className="text-2xl font-bold text-emerald-400">₹{totalProfit.toFixed(2)}</span>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {analyticsView === "items" && (
+                      <div className="glass-panel p-6 rounded-3xl border border-white/10">
+                        <h3 className="text-lg font-bold mb-6">Quantity Sold per Item</h3>
+                        <div className="h-72">
+                          <ResponsiveContainer width="100%" height="100%">
+                            <BarChart data={allItemsData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                              <CartesianGrid strokeDasharray="3 3" stroke="#ffffff20" vertical={false} />
+                              <XAxis dataKey="name" stroke="#ffffff50" fontSize={12} tickLine={false} axisLine={false} />
+                              <YAxis stroke="#ffffff50" fontSize={12} tickLine={false} axisLine={false} />
+                              <RechartsTooltip 
+                                cursor={{ fill: '#ffffff10' }}
+                                contentStyle={{ backgroundColor: '#111', borderColor: '#333', borderRadius: '12px' }}
+                                itemStyle={{ color: '#fff' }}
+                              />
+                              <Bar dataKey="quantity" fill="#818cf8" radius={[4, 4, 0, 0]} name="Quantity Sold" />
+                            </BarChart>
+                          </ResponsiveContainer>
+                        </div>
+                      </div>
+                    )}
+
+                    {analyticsView === "users" && (
+                      <div className="glass-panel p-6 rounded-3xl border border-white/10">
+                        <h3 className="text-lg font-bold mb-6">Customer Insights</h3>
+                        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                          <div className="lg:col-span-1 border border-white/10 rounded-2xl overflow-hidden flex flex-col h-[500px]">
+                            <div className="p-4 bg-white/5 border-b border-white/10 font-semibold text-sm">Top Customers</div>
+                            <div className="flex-1 overflow-y-auto">
+                              {allCustomersData.map((c, i) => (
+                                <button
+                                  key={c.id}
+                                  onClick={() => setSelectedCustomerId(c.id)}
+                                  className={`w-full text-left p-4 border-b border-white/5 transition-colors flex items-center justify-between ${selectedCustomerId === c.id ? "bg-white/10" : "hover:bg-white/5"}`}
+                                >
+                                  <div>
+                                    <div className="font-medium text-sm flex items-center gap-2">
+                                      <span className="text-white/40 text-xs">#{i + 1}</span> {c.name}
+                                    </div>
+                                    <div className="text-xs text-white/50">{c.phone !== "N/A" ? c.phone : "No Phone"}</div>
+                                  </div>
+                                  <div className="text-right">
+                                    <div className="font-bold text-pink-400 text-sm">₹{c.totalSpent.toFixed(2)}</div>
+                                    <div className="text-[10px] text-white/50">{c.ordersCount} orders</div>
+                                  </div>
+                                </button>
+                              ))}
+                              {allCustomersData.length === 0 && (
+                                <div className="p-8 text-center text-white/40 text-sm">No customers in this timeframe</div>
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="lg:col-span-2 border border-white/10 rounded-2xl p-6 bg-black/40 h-[500px] overflow-y-auto">
+                            {(() => {
+                              let selectedC = allCustomersData.find(c => c.id === selectedCustomerId);
+                              if (!selectedC && allCustomersData.length > 0) {
+                                selectedC = allCustomersData[0];
+                              }
+                              if (!selectedC) {
+                                return <div className="h-full flex items-center justify-center text-white/40">Select a customer to view details</div>;
+                              }
+
+                              const mostBought = Object.entries(selectedC.products).sort((a, b) => b[1] - a[1])[0]?.[0] || 'N/A';
+                              const peakHour = Object.entries(selectedC.hours).sort((a, b) => b[1] - a[1])[0]?.[0] || 'N/A';
+                              const formattedPeakHour = peakHour !== 'N/A' ? `${peakHour}:00 - ${parseInt(peakHour)+1}:00` : 'N/A';
+                              
+                              return (
+                                <div className="space-y-6">
+                                  <div className="flex items-start justify-between">
+                                    <div>
+                                      <h4 className="text-2xl font-bold mb-1">{selectedC.name}</h4>
+                                      <div className="text-white/50 text-sm flex gap-4">
+                                        <span>{selectedC.phone}</span>
+                                        <span>Room: {selectedC.room}</span>
+                                      </div>
+                                    </div>
+                                  </div>
+
+                                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                                    <div className="bg-white/5 p-4 rounded-xl border border-white/10">
+                                      <div className="text-white/40 text-xs mb-1 uppercase">Total Spent</div>
+                                      <div className="font-bold text-lg text-pink-400">₹{selectedC.totalSpent.toFixed(2)}</div>
+                                    </div>
+                                    <div className="bg-white/5 p-4 rounded-xl border border-white/10">
+                                      <div className="text-white/40 text-xs mb-1 uppercase">Profit</div>
+                                      <div className="font-bold text-lg text-emerald-400">₹{selectedC.profit.toFixed(2)}</div>
+                                    </div>
+                                    <div className="bg-white/5 p-4 rounded-xl border border-white/10">
+                                      <div className="text-white/40 text-xs mb-1 uppercase">Total Orders</div>
+                                      <div className="font-bold text-lg text-white">{selectedC.ordersCount}</div>
+                                    </div>
+                                    <div className="bg-white/5 p-4 rounded-xl border border-white/10">
+                                      <div className="text-white/40 text-xs mb-1 uppercase">Items Bought</div>
+                                      <div className="font-bold text-lg text-indigo-400">{selectedC.itemsCount}</div>
+                                    </div>
+                                  </div>
+
+                                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                    <div className="bg-white/5 p-4 rounded-xl border border-white/10 flex items-center justify-between">
+                                      <div className="text-white/40 text-xs uppercase">Most Bought</div>
+                                      <div className="font-medium text-sm text-right px-2">{mostBought}</div>
+                                    </div>
+                                    <div className="bg-white/5 p-4 rounded-xl border border-white/10 flex items-center justify-between">
+                                      <div className="text-white/40 text-xs uppercase">Peak Time</div>
+                                      <div className="font-medium text-sm text-right px-2">{formattedPeakHour}</div>
+                                    </div>
+                                  </div>
+                                  
+                                  <div>
+                                    <h5 className="font-semibold text-sm mb-3 text-white/70">Top Purchased Items</h5>
+                                    <div className="space-y-2">
+                                      {Object.entries(selectedC.products).sort((a,b)=>b[1]-a[1]).slice(0, 5).map(([name, qty]) => (
+                                        <div key={name} className="flex justify-between items-center bg-white/5 p-3 rounded-lg border border-white/5">
+                                          <span className="text-sm">{name}</span>
+                                          <span className="text-xs font-bold bg-white/10 px-2 py-1 rounded-md">{qty}x</span>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            })()}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {analyticsView === "low_stock" && (
+                      <div className="glass-panel p-6 rounded-3xl border border-white/10 flex flex-col h-[600px]">
+                        <h3 className="text-lg font-bold mb-4">Stock Levels</h3>
+                        <div className="flex-1 overflow-y-auto pr-2 space-y-2">
+                          {localProducts
+                            .sort((a,b) => {
+                              const aThreshold = lowStockThresholds[a.id] || 0;
+                              const bThreshold = lowStockThresholds[b.id] || 0;
+                              const aRatio = aThreshold > 0 ? a.stock / aThreshold : a.stock;
+                              const bRatio = bThreshold > 0 ? b.stock / bThreshold : b.stock;
+                              return aRatio - bRatio;
+                            })
+                            .map((item) => {
+                              const threshold = lowStockThresholds[item.id] || 0;
+                              const isRed = item.stock <= threshold;
+                              const isYellow = item.stock > threshold && item.stock <= threshold + 5;
+                              
+                              const bgClass = isRed ? "bg-red-500/10 border-red-500/20" : isYellow ? "bg-amber-500/10 border-amber-500/20" : "bg-emerald-500/10 border-emerald-500/20";
+                              const textClass = isRed ? "text-red-200" : isYellow ? "text-amber-200" : "text-emerald-200";
+                              const subTextClass = isRed ? "text-red-400/70" : isYellow ? "text-amber-400/70" : "text-emerald-400/70";
+                              const rightTextClass = isRed ? "text-red-400" : isYellow ? "text-amber-400" : "text-emerald-400";
+                              
+                              return (
+                                <div key={item.id} className={`flex justify-between items-center p-4 rounded-xl border ${bgClass}`}>
+                                  <div className="flex items-center gap-4">
+                                    <img src={item.image} className="w-12 h-12 rounded-lg object-cover" alt={item.name} />
+                                    <div>
+                                      <div className={`font-semibold text-sm sm:text-base ${textClass}`}>{item.name}</div>
+                                      <div className={`text-xs ${subTextClass}`}>Threshold: {threshold}</div>
+                                    </div>
+                                  </div>
+                                  <div className="text-right">
+                                    <div className={`font-bold text-lg ${rightTextClass}`}>{item.stock} left</div>
+                                    <div className="text-[10px] text-white/40">{item.category}</div>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          {localProducts.length === 0 && (
+                            <div className="p-10 text-center text-white/40">No items available.</div>
+                          )}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 );
               })()}

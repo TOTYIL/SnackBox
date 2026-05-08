@@ -78,13 +78,26 @@ export default function App() {
 
   const [cartItems, setCartItems] = useState<CartItem[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
+  const [globalSales, setGlobalSales] = useState<Record<string, number>>({});
+
+  const fetchGlobalSales = React.useCallback(async () => {
+    if (!supabase) return;
+    const { data: items, error } = await supabase.from("order_items").select("product_id, quantity");
+    if (!error && items) {
+      const sales: Record<string, number> = {};
+      items.forEach(item => {
+        sales[item.product_id] = (sales[item.product_id] || 0) + item.quantity;
+      });
+      setGlobalSales(sales);
+    }
+  }, []);
 
   const fetchProducts = React.useCallback(async () => {
     if (!supabase) return;
     const { data: dbProducts, error: pErr } = await supabase
       .from("products")
       .select("*")
-      .order("created_at", { ascending: true });
+      .order("created_at", { ascending: false });
     if (dbProducts && dbProducts.length > 0) {
       const newProducts = dbProducts
         .filter((d) => Number(d.stock) >= 0)
@@ -97,6 +110,7 @@ export default function App() {
           image: d.image,
           inStock: d.in_stock,
           stock: Number(d.stock),
+          created_at: d.created_at,
         }));
       setProductsList((prev) => {
         if (JSON.stringify(prev) === JSON.stringify(newProducts)) return prev;
@@ -196,6 +210,7 @@ export default function App() {
 
           return {
             id: o.id,
+            userId: o.user_id,
             customerName: o.customer_name,
             phone: o.phone,
             room: actualRoom,
@@ -227,6 +242,7 @@ export default function App() {
 
     const loadData = async () => {
       await fetchProducts();
+      await fetchGlobalSales();
 
       // Payments Config
       const { data: qData } = await supabase
@@ -269,6 +285,7 @@ export default function App() {
     const interval = setInterval(async () => {
       fetchOrders();
       fetchProducts();
+      fetchGlobalSales();
 
       if (supabase) {
         // Poll Site Status and Config just in case real-time isn't enabled
@@ -350,7 +367,7 @@ export default function App() {
       if (configChannel) supabase.removeChannel(configChannel);
       if (productsChannel) supabase.removeChannel(productsChannel);
     };
-  }, [fetchOrders, fetchProducts, currentUser]);
+  }, [fetchOrders, fetchProducts, fetchGlobalSales, currentUser]);
 
   // Intercept special search query
   useEffect(() => {
@@ -364,6 +381,33 @@ export default function App() {
     }
   }, [searchQuery, currentUser]);
 
+  // Body scroll lock for modals
+  useEffect(() => {
+    const isModalOpen =
+      isDevMode ||
+      isCartOpen ||
+      isCheckoutOpen ||
+      isTrackerOpen ||
+      activePage !== "home";
+
+    if (isModalOpen) {
+      // Prevent body scrolling
+      document.body.style.overflow = "hidden";
+    } else {
+      document.body.style.overflow = "";
+    }
+
+    return () => {
+      document.body.style.overflow = "";
+    };
+  }, [
+    isDevMode,
+    isCartOpen,
+    isCheckoutOpen,
+    isTrackerOpen,
+    activePage,
+  ]);
+
   const productCategories = useMemo(() => {
     return [
       "All",
@@ -376,8 +420,8 @@ export default function App() {
               : "";
           }),
         ),
-      ),
-    ].filter(Boolean);
+      ).filter(c => c && c.toLowerCase() !== "all"),
+    ];
   }, [productsList]);
 
   // Check rage mode via user orders
@@ -400,13 +444,40 @@ export default function App() {
       return prodCat === activeLower;
     });
 
+    const getPriority = (p: Product) => {
+      if (!p.created_at || !currentUser?.id) return 0;
+      const createdTime = new Date(p.created_at).getTime();
+      if (Date.now() - createdTime < 24 * 60 * 60 * 1000) {
+        const storageKey = `scratched_${currentUser.id}_${p.id}`;
+        const scratchedAt = localStorage.getItem(storageKey);
+        if (!scratchedAt) {
+          return 2;
+        } else {
+          const scratchedTime = parseInt(scratchedAt, 10);
+          if (Date.now() - scratchedTime < 60 * 60 * 1000) {
+            return 1;
+          }
+        }
+      }
+      return 0;
+    };
+
     return list.sort((a, b) => {
       const aInStock = a.inStock && a.stock > 0;
       const bInStock = b.inStock && b.stock > 0;
-      if (aInStock === bInStock) return 0;
-      return aInStock ? -1 : 1;
+      if (aInStock !== bInStock) return aInStock ? -1 : 1;
+      
+      const aPriority = getPriority(a);
+      const bPriority = getPriority(b);
+      if (aPriority !== bPriority) return bPriority - aPriority;
+
+      const aSales = globalSales[a.id] || 0;
+      const bSales = globalSales[b.id] || 0;
+      if (aSales !== bSales) return bSales - aSales;
+
+      return (b.created_at || "").localeCompare(a.created_at || "");
     });
-  }, [activeCategory, searchQuery, productsList]);
+  }, [activeCategory, searchQuery, productsList, globalSales, currentUser]);
 
   const addToCart = React.useCallback((product: Product) => {
     setCartItems((prev) => {
@@ -574,7 +645,7 @@ export default function App() {
     setCartItems([]);
     
     // Set for session tracking
-    setIsTrackerOpen(true);
+    // setIsTrackerOpen(true); -> Will be handled by onSuccessClose
   };
 
   const deleteOrder = async (orderId: string) => {
@@ -706,8 +777,14 @@ export default function App() {
   );
 
   const trackedOrders = useMemo(() => {
+    const now = Date.now();
     return orders.filter((o) => {
       if (dismissedOrderIds.includes(o.id)) return false;
+      if (o.status === "cancelled") {
+        const orderTime = new Date(o.date).getTime();
+        // Hide if more than 15 minutes have passed since order date
+        if (now - orderTime > 15 * 60 * 1000) return false;
+      }
       return true;
     });
   }, [orders, dismissedOrderIds]);
@@ -948,6 +1025,7 @@ export default function App() {
                     key={product.id}
                     product={product}
                     cartQuantity={cartItem ? cartItem.quantity : 0}
+                    userId={currentUser?.id}
                     onAdd={addToCart}
                     onUpdate={updateQuantity}
                   />
@@ -1000,7 +1078,7 @@ export default function App() {
               &copy; {new Date().getFullYear()} SnackBox Inc.
             </div>
             <div className="w-1 h-1 rounded-full bg-white/20" />
-            <div className="text-white/40">v1.2.09</div>
+            <div className="text-white/40">v1.2.10</div>
           </div>
         </div>
       </footer>
@@ -1016,6 +1094,10 @@ export default function App() {
       <CheckoutModal
         isOpen={isCheckoutOpen}
         onClose={() => setIsCheckoutOpen(false)}
+        onSuccessClose={() => {
+          setIsCheckoutOpen(false);
+          setIsTrackerOpen(true);
+        }}
         total={cartTotalPrice}
         cartTotalItems={cartTotalItems}
         upiId={upiId}

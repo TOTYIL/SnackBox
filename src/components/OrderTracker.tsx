@@ -117,7 +117,7 @@ export const OrderTracker: React.FC<OrderTrackerProps> = ({
               </button>
             </div>
 
-            <div className="flex-1 overflow-y-auto w-full relative mt-4">
+            <div className="flex-1 relative w-full mt-4">
               <AnimatePresence mode="wait">
                 {activeTab === "tracker" ? (
                   <motion.div
@@ -157,7 +157,9 @@ export const OrderTracker: React.FC<OrderTrackerProps> = ({
                                   Order #{order.id.slice(-4).toUpperCase()}
                                 </h3>
                                 <p className="text-xs text-white/50 font-medium">
-                                  {new Date(order.date).toLocaleTimeString([], {
+                                  {new Date(order.date).toLocaleString([], {
+                                    month: "short",
+                                    day: "numeric",
                                     hour: "2-digit",
                                     minute: "2-digit",
                                   })}
@@ -334,7 +336,7 @@ export const OrderTracker: React.FC<OrderTrackerProps> = ({
                             </div>
                             <div>
                               <p className="text-white/40 text-xs font-bold tracking-wider uppercase mb-1">
-                                Connected As
+                                Hello
                               </p>
                               <h3 className="text-2xl font-black text-white tracking-tight leading-none">
                                 {currentUser.username}

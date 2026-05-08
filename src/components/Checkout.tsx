@@ -15,6 +15,7 @@ import confetti from "canvas-confetti";
 interface CheckoutModalProps {
   isOpen: boolean;
   onClose: () => void;
+  onSuccessClose?: () => void;
   total: number;
   cartTotalItems: number;
   upiId: string;
@@ -32,6 +33,7 @@ interface CheckoutModalProps {
 export const CheckoutModal: React.FC<CheckoutModalProps> = ({
   isOpen,
   onClose,
+  onSuccessClose,
   total,
   cartTotalItems,
   upiId,
@@ -159,7 +161,8 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
     }); // Send DB request immediately so it processes in background
 
     setTimeout(() => {
-      onClose(); // Close modal after confetti completes
+      if (onSuccessClose) onSuccessClose();
+      else onClose(); // Close modal after confetti completes
     }, 2500);
   };
 
@@ -354,21 +357,27 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
                   How would you like to pay?
                 </p>
 
-                <div className="space-y-4">
+                <div className="grid grid-cols-2 gap-3 sm:gap-4">
                   <button
                     onClick={() => setStep("payment_online_choice")}
-                    className="w-full bg-white/10 hover:bg-white/20 border border-white/10 rounded-2xl p-6 flex flex-col items-center justify-center gap-3 transition-colors group"
+                    className="w-full h-full min-h-[160px] sm:min-h-[180px] bg-white/10 hover:bg-white/20 border border-white/10 rounded-2xl p-4 sm:p-6 flex flex-col items-center justify-center gap-2 sm:gap-3 transition-colors group"
                   >
-                    <div className="w-12 h-12 rounded-full bg-indigo-500/20 text-indigo-400 flex items-center justify-center group-hover:scale-110 transition-transform">
-                      <QrCode size={24} />
+                    <div className="flex flex-col items-center justify-center flex-1">
+                      <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-full bg-indigo-500/20 text-indigo-400 flex items-center justify-center group-hover:scale-110 transition-transform mb-2 sm:mb-3">
+                        <QrCode size={20} className="sm:hidden" />
+                        <QrCode size={24} className="hidden sm:block" />
+                      </div>
+                      <div className="text-center">
+                        <h3 className="font-bold text-sm sm:text-lg mb-1">Pay Now</h3>
+                        <p className="text-xs sm:text-sm text-white/50 leading-tight">
+                          Pay via UPI instantly
+                        </p>
+                      </div>
                     </div>
-                    <div>
-                      <h3 className="font-bold text-lg mb-1">Pay Now</h3>
-                      <p className="text-sm text-white/50">
-                        Pay via UPI instantly
-                      </p>
+                    {/* Fixed height container for discount to ensure equal button heights even if one lacks discount */}
+                    <div className="h-6 flex items-center justify-center">
                       {discountAmount > 0 && (
-                        <p className="text-xs text-green-400 mt-1 pb-1">
+                        <p className="text-[10px] sm:text-xs text-green-400 font-medium">
                           Save ₹{discountAmount.toFixed(2)}!
                         </p>
                       )}
@@ -377,19 +386,23 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
 
                   <button
                     onClick={() => handleFinish("cod")}
-                    className="w-full bg-white/10 hover:bg-white/20 border border-white/10 rounded-2xl p-6 flex flex-col items-center justify-center gap-3 transition-colors group"
+                    className="w-full h-full min-h-[160px] sm:min-h-[180px] bg-white/10 hover:bg-white/20 border border-white/10 rounded-2xl p-4 sm:p-6 flex flex-col items-center justify-center gap-2 sm:gap-3 transition-colors group"
                   >
-                    <div className="w-12 h-12 rounded-full bg-green-500/20 text-green-400 flex items-center justify-center group-hover:scale-110 transition-transform">
-                      <Banknote size={24} />
+                    <div className="flex flex-col items-center justify-center flex-1">
+                      <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-full bg-green-500/20 text-green-400 flex items-center justify-center group-hover:scale-110 transition-transform mb-2 sm:mb-3">
+                        <Banknote size={20} className="sm:hidden" />
+                        <Banknote size={24} className="hidden sm:block" />
+                      </div>
+                      <div className="text-center">
+                        <h3 className="font-bold text-sm sm:text-lg mb-1">
+                          COD
+                        </h3>
+                        <p className="text-xs sm:text-sm text-white/50 leading-tight">
+                          Pay when your snacks arrive
+                        </p>
+                      </div>
                     </div>
-                    <div>
-                      <h3 className="font-bold text-lg mb-1">
-                        Cash on Delivery
-                      </h3>
-                      <p className="text-sm text-white/50">
-                        Pay when your snacks arrive
-                      </p>
-                    </div>
+                    <div className="h-6"></div>
                   </button>
                 </div>
               </motion.div>
