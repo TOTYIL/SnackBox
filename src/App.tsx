@@ -205,8 +205,11 @@ export default function App() {
           }));
 
           const cartTotalItems = items.reduce((acc: number, item: any) => acc + item.quantity, 0);
+          const subtotal = items.reduce((acc, item: any) => acc + item.price * item.quantity, 0);
           const prepaidDiscount = paymentMethod === "prepaid" ? Math.min(0.5, cartTotalItems * 0.1) : 0;
           const cravePointsDisabled = o.crave_points_disabled === true || (typeof o.room === "string" && o.room.includes("||C:NO"));
+
+          const calculatedTotal = Math.max(0, subtotal - pointsUsed - prepaidDiscount);
 
           return {
             id: o.id,
@@ -219,7 +222,7 @@ export default function App() {
             prepaidDiscount,
             cravePointsDisabled,
             date: o.date,
-            total: Number(o.total),
+            total: calculatedTotal,
             status: statusToUse,
             items,
           };

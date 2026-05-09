@@ -193,8 +193,11 @@ export const DevPage: React.FC<DevPageProps> = ({
           }));
 
           const cartTotalItems = items.reduce((acc: number, item: any) => acc + item.quantity, 0);
+          const subtotal = items.reduce((acc, item: any) => acc + item.price * item.quantity, 0);
           const prepaidDiscount = paymentMethod === "prepaid" ? Math.min(0.5, cartTotalItems * 0.1) : 0;
           const cravePointsDisabled = o.crave_points_disabled === true || (typeof o.room === "string" && o.room.includes("||C:NO"));
+
+          const calculatedTotal = Math.max(0, subtotal - pointsUsed - prepaidDiscount);
 
           return {
             id: o.id,
@@ -208,7 +211,7 @@ export const DevPage: React.FC<DevPageProps> = ({
             prepaidDiscount,
             cravePointsDisabled,
             date: o.date,
-            total: Number(o.total),
+            total: calculatedTotal,
             status: statusToUse,
             items,
           };
@@ -936,7 +939,7 @@ export const DevPage: React.FC<DevPageProps> = ({
                               <div className="pt-2 flex justify-between font-bold">
                                 <span>Final Total</span>
                                 <span className="text-pink-300">
-                                  ₹{Math.max(0, order.total - (order.pointsUsed || 0) - (order.prepaidDiscount || 0)).toFixed(2)}
+                                  ₹{order.total.toFixed(2)}
                                 </span>
                               </div>
                             </div>
@@ -1110,7 +1113,7 @@ export const DevPage: React.FC<DevPageProps> = ({
                             <div className="flex items-center gap-4">
                               <div className="text-right">
                                 <p className="text-sm font-bold text-emerald-400">
-                                  ₹{dateOrders.reduce((sum, o) => sum + Math.max(0, o.total - (o.pointsUsed || 0) - (o.prepaidDiscount || 0)), 0).toFixed(2)}
+                                  ₹{dateOrders.reduce((sum, o) => sum + o.total, 0).toFixed(2)}
                                 </p>
                                 <p className="text-[10px] text-white/40">Total Value</p>
                               </div>
@@ -1314,7 +1317,7 @@ export const DevPage: React.FC<DevPageProps> = ({
                                                 <div className="pt-2 flex justify-between font-bold">
                                                   <span>Final Total</span>
                                                   <span className="text-white/80">
-                                                    ₹{Math.max(0, order.total - (order.pointsUsed || 0) - (order.prepaidDiscount || 0)).toFixed(2)}
+                                                    ₹{order.total.toFixed(2)}
                                                   </span>
                                                 </div>
                                               </div>
@@ -1713,7 +1716,7 @@ export const DevPage: React.FC<DevPageProps> = ({
                 }> = {};
 
                 completedOrders.forEach(o => {
-                  const finalTotal = Math.max(0, o.total - (o.pointsUsed || 0) - (o.prepaidDiscount || 0));
+                  const finalTotal = o.total;
                   totalRevenue += finalTotal;
                   
                   let orderCost = 0;
@@ -1750,7 +1753,8 @@ export const DevPage: React.FC<DevPageProps> = ({
                       itemStats[item.id] = { id: item.id, name: item.name, quantity: 0, revenue: 0, profit: 0 };
                     }
                     itemStats[item.id].quantity += item.quantity;
-                    const itemRevenueShare = o.total > 0 ? (item.price * item.quantity) / o.total : 0; // Rough estimate of its contribution to finalTotal
+                    const orderSubtotal = o.items ? o.items.reduce((acc, i) => acc + (i.price * i.quantity), 0) : 0;
+                    const itemRevenueShare = orderSubtotal > 0 ? (item.price * item.quantity) / orderSubtotal : 0; // Rough estimate of its contribution to finalTotal
                     const itemRevenue = finalTotal * itemRevenueShare;
 
                     itemStats[item.id].revenue += itemRevenue;
