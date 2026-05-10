@@ -11,7 +11,7 @@
 
 body {
   font-family: 'Outfit', sans-serif;
-  background-color: #050505; /* Fallback */
+  background-color: #000000; /* Fallback */
   color: #f8fafc;
   overflow-x: hidden;
   transition: background-color 1.5s ease, color 1.5s ease;
@@ -25,10 +25,11 @@ body {
   width: 100vw;
   height: 100vh;
   z-index: -1;
-  background: 
-    radial-gradient(circle at 15% 50%, rgba(139, 92, 246, 0.3) 0%, transparent 55%),
-    radial-gradient(circle at 85% 30%, rgba(236, 72, 153, 0.3) 0%, transparent 55%),
-    radial-gradient(circle at 50% 80%, rgba(56, 189, 248, 0.3) 0%, transparent 55%);
+  background-color: #020202;
+  background-image: 
+    radial-gradient(circle at 15% 50%, rgba(139, 92, 246, 0.15) 0%, transparent 55%),
+    radial-gradient(circle at 85% 30%, rgba(236, 72, 153, 0.15) 0%, transparent 55%),
+    radial-gradient(circle at 50% 80%, rgba(56, 189, 248, 0.15) 0%, transparent 55%);
 }
 
 @keyframes meshAnim {

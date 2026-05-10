@@ -58,7 +58,11 @@ export const Cart: React.FC<CartProps> = ({ isOpen, onClose, items, updateQuanti
                     key={item.id} 
                     className="flex gap-4 items-center bg-white/5 p-3 rounded-2xl border border-white/10"
                   >
-                    <img src={item.image} alt={item.name} className="w-16 h-16 rounded-xl object-cover" />
+                    <div 
+                      className="w-16 h-16 rounded-xl shrink-0 bg-cover bg-center" 
+                      style={{ backgroundImage: `url(${item.image})` }}
+                      title={item.name}
+                    />
                     <div className="flex-1">
                       <h4 className="font-medium line-clamp-1">{item.name}</h4>
                       <div className="text-sm text-white/60">₹{item.price.toFixed(2)}</div>

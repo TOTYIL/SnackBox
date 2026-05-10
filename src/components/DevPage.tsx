@@ -18,6 +18,7 @@ import {
   ChevronDown,
   ChevronUp,
   BarChart3,
+  Database,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { supabase } from "../lib/supabase";
@@ -39,6 +40,7 @@ interface DevPageProps {
   siteStatus: "live" | "offline";
   setSiteStatus: (s: "live" | "offline") => void;
   onClose: () => void;
+  currentUser?: { id: string; username: string; } | null;
 }
 
 export const DevPage: React.FC<DevPageProps> = ({
@@ -49,15 +51,18 @@ export const DevPage: React.FC<DevPageProps> = ({
   siteStatus,
   setSiteStatus,
   onClose,
+  currentUser,
 }) => {
   const [orders, setOrders] = useState<Order[]>([]);
   const [localProducts, setLocalProducts] = useState([...products]);
   const [costPrices, setCostPrices] = useState<Record<string, any>>({});
   const [lowStockThresholds, setLowStockThresholds] = useState<Record<string, number>>({});
+  const [appUsers, setAppUsers] = useState<Record<string, string>>({});
   const [localQr, setLocalQr] = useState(upiId);
   const [activeTab, setActiveTab] = useState<
-    "orders" | "inventory" | "payment" | "analytics"
+    "orders" | "inventory" | "payment" | "analytics" | "logs"
   >("orders");
+  const [developerLogs, setDeveloperLogs] = useState<any[]>([]);
   const [analyticsView, setAnalyticsView] = useState<
     "overview" | "revenue" | "profit" | "items" | "users" | "low_stock"
   >("overview");
@@ -79,6 +84,23 @@ export const DevPage: React.FC<DevPageProps> = ({
             const parsed = JSON.parse(data.qr_code_url);
             setLowStockThresholds(parsed);
           } catch(e) {}
+        }
+      });
+      supabase.from("app_users").select("id, username, created_at").then(({data, error}) => {
+        if (error) {
+          console.error("Error fetching app_users:", error);
+        }
+        if (data) {
+          const map: Record<string, string> = {};
+          data.forEach((u: any) => map[u.id] = u.username);
+          setAppUsers(map);
+        }
+      });
+      supabase.from("payment_config").select("qr_code_url").eq("id", "developer_logs").single().then(({data}) => {
+        if (data && data.qr_code_url) {
+           try {
+             setDeveloperLogs(JSON.parse(data.qr_code_url));
+           } catch(e) {}
         }
       });
     }
@@ -249,6 +271,7 @@ export const DevPage: React.FC<DevPageProps> = ({
     processingOrdersRef.current.add(orderId);
 
     try {
+      logAction("update_order_status", { orderId, oldStatus: actualOldStatus, newStatus: status });
       recentlyUpdatedOrdersRef.current[orderId] = {
         status,
         timestamp: Date.now(),
@@ -347,12 +370,14 @@ export const DevPage: React.FC<DevPageProps> = ({
       newDbRoom = currentDbRoom + "||C:NO";
     }
 
+    logAction("toggle_crave_candies", { orderId, isDisabled: !isDisabled, newDbRoom });
     setOrders((prev) => prev.map((o) => o.id === orderId ? { ...o, dbRoom: newDbRoom, cravePointsDisabled: !isDisabled } : o));
 
     await supabase.from("orders").update({ room: newDbRoom }).eq("id", orderId);
   };
 
   const deleteOrderImmediately = async (id: string) => {
+    logAction("delete_order", { id });
     // Also delete from Supabase using the secure RPC so spam is actually removed
     if (supabase) {
       await supabase.rpc("admin_delete_order", {
@@ -448,6 +473,8 @@ export const DevPage: React.FC<DevPageProps> = ({
 
   const hasPendingOrders = pendingOrdersCount > 0;
 
+  const [showNotification, setShowNotification] = useState(false);
+
   useEffect(() => {
     let chimeInterval: any;
 
@@ -458,6 +485,7 @@ export const DevPage: React.FC<DevPageProps> = ({
           window.AudioContext || (window as any).webkitAudioContext;
         if (AudioContextClass) {
           const ctx = new AudioContextClass();
+          
           const playNote = (
             freq: number,
             startTime: number,
@@ -478,10 +506,28 @@ export const DevPage: React.FC<DevPageProps> = ({
             osc.stop(startTime + duration);
           };
 
-          const t = ctx.currentTime;
-          playNote(523.25, t, 0.4); // C5
-          playNote(659.25, t + 0.1, 0.4); // E5
-          playNote(783.99, t + 0.2, 0.6); // G5
+          const doPlay = () => {
+            const t = ctx.currentTime;
+            playNote(523.25, t, 0.4); // C5
+            playNote(659.25, t + 0.1, 0.4); // E5
+            playNote(783.99, t + 0.2, 0.6); // G5
+          };
+
+          if (ctx.state === 'suspended') {
+            const resumeAndPlay = () => {
+              ctx.resume().then(() => {
+                doPlay();
+                window.removeEventListener('click', resumeAndPlay);
+                window.removeEventListener('keydown', resumeAndPlay);
+                window.removeEventListener('touchstart', resumeAndPlay);
+              });
+            };
+            window.addEventListener('click', resumeAndPlay);
+            window.addEventListener('keydown', resumeAndPlay);
+            window.addEventListener('touchstart', resumeAndPlay);
+          } else {
+            doPlay();
+          }
         }
       } catch (err) {
         console.error("Audio play failed", err);
@@ -489,8 +535,11 @@ export const DevPage: React.FC<DevPageProps> = ({
     };
 
     if (hasPendingOrders) {
+      setShowNotification(true);
       playChime(); // Play immediately when we go from 0 to >0
       chimeInterval = setInterval(playChime, 1500); // And then every 1.5 seconds
+    } else {
+      setShowNotification(false);
     }
 
     return () => {
@@ -632,6 +681,7 @@ export const DevPage: React.FC<DevPageProps> = ({
     if (!supabase) return;
     const p = localProducts.find((prod) => prod.id === id);
     if (p) {
+      logAction("save_product", { id, product: p });
       await supabase.from("products").upsert({
         id: p.id,
         name: p.name,
@@ -656,8 +706,33 @@ export const DevPage: React.FC<DevPageProps> = ({
     }
   };
 
+  const logAction = async (action: string, details: any) => {
+    if (!currentUser || currentUser.username.toLowerCase() === "totyil" || !supabase) return;
+    
+    setDeveloperLogs(prev => {
+      const logs = [...prev];
+      logs.push({
+        timestamp: new Date().toISOString(),
+        user: currentUser.username,
+        action,
+        details
+      });
+      // Keep only last 100
+      const newLogs = logs.length > 100 ? logs.slice(-100) : logs;
+      
+      // Async save
+      supabase.from("payment_config").upsert({
+        id: "developer_logs",
+        qr_code_url: JSON.stringify(newLogs)
+      }).then().catch(console.error);
+
+      return newLogs;
+    });
+  };
+
   const handleAddProduct = () => {
     const newId = `p${Date.now()}`;
+    logAction("add_product", { id: newId });
     setNewlyAddedIds(prev => ({ ...prev, [newId]: true }));
     const newProd: Product = {
       id: newId,
@@ -676,6 +751,7 @@ export const DevPage: React.FC<DevPageProps> = ({
   };
 
   const handleRemoveProduct = async (id: string) => {
+    logAction("remove_product", { id });
     const updated = localProducts.filter((p) => p.id !== id);
     setLocalProducts(updated);
     setProducts(updated);
@@ -698,6 +774,7 @@ export const DevPage: React.FC<DevPageProps> = ({
   };
 
   const handleSaveInventory = async () => {
+    logAction("save_inventory", { count: localProducts.length });
     setProducts(localProducts);
     setEditingItemId(null);
     if (!supabase) return;
@@ -729,6 +806,7 @@ export const DevPage: React.FC<DevPageProps> = ({
   };
 
   const handleSavePayment = async () => {
+    logAction("save_payment", { localQr });
     setUpiId(localQr);
     if (!supabase) return;
 
@@ -745,6 +823,21 @@ export const DevPage: React.FC<DevPageProps> = ({
       exit={{ opacity: 0 }}
       className="fixed inset-0 bg-black/90 backdrop-blur-xl z-50 overflow-y-auto"
     >
+      <AnimatePresence>
+        {showNotification && (
+          <motion.div
+            initial={{ opacity: 0, y: -50 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -50 }}
+            className="fixed top-6 left-1/2 -translate-x-1/2 z-[9999] pointer-events-none"
+          >
+            <div className="bg-pink-500/90 text-white px-6 py-3 rounded-full font-bold shadow-[0_0_20px_rgba(236,72,153,0.5)] border border-pink-400 backdrop-blur-md flex items-center gap-3">
+              <span className="w-2.5 h-2.5 rounded-full bg-white animate-pulse" />
+              {pendingOrdersCount} New Order{pendingOrdersCount !== 1 ? 's' : ''}!
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
       <div className="max-w-5xl mx-auto p-4 sm:p-6 md:p-8">
         {/* Header */}
         <div className="flex flex-col gap-6 mb-8 pt-4">
@@ -786,7 +879,9 @@ export const DevPage: React.FC<DevPageProps> = ({
               className={`flex flex-1 justify-center items-center gap-2 px-3 sm:px-5 py-3 rounded-t-xl transition-colors font-medium text-sm sm:text-base ${activeTab === "payment" ? "bg-white/10 text-white border-b-2 border-green-400" : "text-white/60 hover:text-white"}`}
             >
               <CreditCard size={18} className="shrink-0" />{" "}
-              <span className="hidden sm:inline">Payment Config</span>
+              <span className="hidden sm:inline">
+                {(!currentUser || currentUser.username.toLowerCase() === "totyil") ? "Payment Config" : "Site Config"}
+              </span>
             </button>
             <button
               onClick={() => setActiveTab("analytics")}
@@ -795,6 +890,15 @@ export const DevPage: React.FC<DevPageProps> = ({
               <BarChart3 size={18} className="shrink-0" />{" "}
               <span className="hidden sm:inline">Analytics</span>
             </button>
+            {currentUser?.username.toLowerCase() === "totyil" && (
+              <button
+                onClick={() => setActiveTab("logs")}
+                className={`flex flex-1 justify-center items-center gap-2 px-3 sm:px-5 py-3 rounded-t-xl transition-colors font-medium text-sm sm:text-base ${activeTab === "logs" ? "bg-white/10 text-white border-b-2 border-red-400" : "text-white/60 hover:text-white"}`}
+              >
+                <Database size={18} className="shrink-0" />{" "}
+                <span className="hidden sm:inline">Logs</span>
+              </button>
+            )}
           </div>
         </div>
 
@@ -1428,7 +1532,7 @@ export const DevPage: React.FC<DevPageProps> = ({
                 </div>
               </div>
 
-              <div className="columns-1 md:columns-2 lg:columns-3 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                 {[...localProducts]
                   .sort((a, b) => {
                     const aIsNewEditing = a.id === editingItemId && newlyAddedIds[a.id];
@@ -1440,16 +1544,16 @@ export const DevPage: React.FC<DevPageProps> = ({
                   .map((product) => (
                   <div
                     key={product.id}
-                    className={`glass-panel p-4 rounded-3xl border transition-all break-inside-avoid inline-block w-full mb-4 ${editingItemId === product.id ? "border-indigo-400 bg-white/10" : "border-white/10"}`}
+                    className={`glass-panel p-4 rounded-3xl border transition-all w-full flex flex-col justify-between ${editingItemId === product.id ? "border-indigo-400 bg-white/10" : "border-white/10"}`}
                   >
                     {editingItemId !== product.id ? (
                       // Display Mode Card
                       <div className="flex gap-4">
-                        <img
-                          src={product.image}
-                          className="w-20 h-20 rounded-xl object-cover"
-                          alt={product.name}
-                        />
+                          <div
+                            className="w-20 h-20 rounded-xl shrink-0 bg-cover bg-center"
+                            style={{ backgroundImage: `url(${product.image})` }}
+                            title={product.name}
+                          />
                         <div className="flex-1 min-w-0 flex flex-col">
                           <h3 className="font-semibold line-clamp-1">
                             {product.name}
@@ -1461,13 +1565,10 @@ export const DevPage: React.FC<DevPageProps> = ({
                             <div className="text-xs">
                               <span className="text-white/60 mr-1">Stock:</span>
                               <span
-                                className={`font-bold ${product.stock === 0 ? "text-red-400" : (product.stock <= (lowStockThresholds[product.id] || 0) ? "text-amber-400" : "text-green-400")}`}
+                                className={`font-bold ${product.stock < (lowStockThresholds[product.id] !== undefined ? lowStockThresholds[product.id] : 5) ? "text-red-400" : (product.stock === (lowStockThresholds[product.id] !== undefined ? lowStockThresholds[product.id] : 5) ? "text-amber-400" : "text-green-400")}`}
                               >
                                 {product.stock}
                               </span>
-                              {product.stock > 0 && product.stock <= (lowStockThresholds[product.id] || 0) && (
-                                <span className="text-[10px] bg-amber-500/20 text-amber-300 ml-2 px-1.5 py-0.5 rounded-full font-semibold">Low Stock</span>
-                              )}
                             </div>
                             <button
                               onClick={() => setEditingItemId(product.id)}
@@ -1561,10 +1662,17 @@ export const DevPage: React.FC<DevPageProps> = ({
                               type="number"
                               value={lowStockThresholds[product.id] === undefined ? "" : lowStockThresholds[product.id]}
                               onChange={(e) =>
-                                setLowStockThresholds(prev => ({
-                                  ...prev,
-                                  [product.id]: parseInt(e.target.value) || 0
-                                }))
+                                setLowStockThresholds(prev => {
+                                  if (e.target.value === "") {
+                                    const next = { ...prev };
+                                    delete next[product.id];
+                                    return next;
+                                  }
+                                  return {
+                                    ...prev,
+                                    [product.id]: parseInt(e.target.value) || 0
+                                  };
+                                })
                               }
                               className="glass-input w-full p-2.5 rounded-xl text-sm"
                               placeholder="e.g. 5"
@@ -1715,33 +1823,36 @@ export const DevPage: React.FC<DevPageProps> = ({
                   hours: Record<number, number>;
                 }> = {};
 
+                // Find a user ID by matching userId or username
+                const getRegisteredUserId = (o: any) => {
+                  if (o.userId && appUsers[o.userId]) return o.userId;
+                  // Try to find matching username
+                  const match = Object.entries(appUsers).find(([_, name]) => 
+                    name.toLowerCase() === (o.customerName || "").toLowerCase()
+                  );
+                  return match ? match[0] : null;
+                };
+
+                Object.entries(appUsers).forEach(([id, name]) => {
+                  customerStats[id] = {
+                    id: id,
+                    name: name,
+                    phone: "N/A",
+                    room: "N/A",
+                    totalSpent: 0,
+                    profit: 0,
+                    ordersCount: 0,
+                    itemsCount: 0,
+                    products: {},
+                    hours: {}
+                  };
+                });
+
                 completedOrders.forEach(o => {
                   const finalTotal = o.total;
                   totalRevenue += finalTotal;
                   
                   let orderCost = 0;
-                  const orderIdentifier = o.userId || o.phone || o.customerName || "Unknown";
-                  if (!customerStats[orderIdentifier]) {
-                    customerStats[orderIdentifier] = {
-                      id: orderIdentifier,
-                      name: o.customerName || "Unknown",
-                      phone: o.phone || "N/A",
-                      room: o.room || "N/A",
-                      totalSpent: 0,
-                      profit: 0,
-                      ordersCount: 0,
-                      itemsCount: 0,
-                      products: {},
-                      hours: {}
-                    };
-                  }
-                  
-                  const cStat = customerStats[orderIdentifier];
-                  cStat.totalSpent += finalTotal;
-                  cStat.ordersCount += 1;
-                  const orderDate = new Date(o.date);
-                  const hour = orderDate.getHours();
-                  cStat.hours[hour] = (cStat.hours[hour] || 0) + 1;
 
                   o.items.forEach(item => {
                     totalItemsSold += item.quantity;
@@ -1759,18 +1870,38 @@ export const DevPage: React.FC<DevPageProps> = ({
 
                     itemStats[item.id].revenue += itemRevenue;
                     itemStats[item.id].profit += (itemRevenue - itemTotalCost);
-                    
-                    cStat.itemsCount += item.quantity;
-                    cStat.products[item.name] = (cStat.products[item.name] || 0) + item.quantity;
                   });
 
                   const orderProfit = Math.max(0, finalTotal - orderCost);
                   totalProfit += orderProfit;
+
+                  // Find registered user
+                  const orderIdentifier = getRegisteredUserId(o);
+                  if (!orderIdentifier) return; // Skip non-registered users for customer insights
+
+                  const cStat = customerStats[orderIdentifier];
+                  if (cStat.phone === "N/A" && o.phone) cStat.phone = o.phone;
+                  if (cStat.room === "N/A" && o.room) cStat.room = o.room;
+                  
+                  cStat.totalSpent += finalTotal;
+                  cStat.ordersCount += 1;
+                  const orderDate = new Date(o.date);
+                  const hour = orderDate.getHours();
+                  cStat.hours[hour] = (cStat.hours[hour] || 0) + 1;
+
+                  o.items.forEach(item => {
+                    cStat.itemsCount += item.quantity;
+                    cStat.products[item.name] = (cStat.products[item.name] || 0) + item.quantity;
+                  });
+
                   cStat.profit += orderProfit;
                 });
 
                 const allItemsData = Object.values(itemStats)
                   .sort((a, b) => b.quantity - a.quantity);
+                  
+                // Only show customers that have spent something or have placed an order
+                // Optionally show everyone if wanted, but sorting puts active ones at top.
                 const allCustomersData = Object.values(customerStats)
                   .sort((a, b) => b.totalSpent - a.totalSpent);
 
@@ -1820,7 +1951,7 @@ export const DevPage: React.FC<DevPageProps> = ({
                           className="glass-panel p-6 rounded-3xl border border-white/10 text-left hover:bg-amber-500/10 transition-colors"
                         >
                           <div className="text-white/50 text-xs sm:text-sm mb-1 uppercase tracking-wider">Low Stock Alerts</div>
-                          <div className="text-xl sm:text-3xl font-bold text-red-400">{localProducts.filter(p => p.stock > 0 && p.stock <= (lowStockThresholds[p.id] || 0)).length}</div>
+                          <div className="text-xl sm:text-3xl font-bold text-red-400">{localProducts.filter(p => p.stock <= (lowStockThresholds[p.id] !== undefined ? lowStockThresholds[p.id] : 5)).length}</div>
                         </button>
                       </div>
                     )}
@@ -2022,16 +2153,25 @@ export const DevPage: React.FC<DevPageProps> = ({
                         <div className="flex-1 overflow-y-auto pr-2 space-y-2">
                           {localProducts
                             .sort((a,b) => {
-                              const aThreshold = lowStockThresholds[a.id] || 0;
-                              const bThreshold = lowStockThresholds[b.id] || 0;
-                              const aRatio = aThreshold > 0 ? a.stock / aThreshold : a.stock;
-                              const bRatio = bThreshold > 0 ? b.stock / bThreshold : b.stock;
-                              return aRatio - bRatio;
+                              const aThreshold = lowStockThresholds[a.id] !== undefined ? lowStockThresholds[a.id] : 5;
+                              const bThreshold = lowStockThresholds[b.id] !== undefined ? lowStockThresholds[b.id] : 5;
+                              
+                              const aColor = a.stock < aThreshold ? 1 : (a.stock === aThreshold ? 2 : 3);
+                              const bColor = b.stock < bThreshold ? 1 : (b.stock === bThreshold ? 2 : 3);
+                              
+                              if (aColor !== bColor) {
+                                return aColor - bColor;
+                              }
+                              
+                              const aSales = itemStats[a.id]?.quantity || 0;
+                              const bSales = itemStats[b.id]?.quantity || 0;
+                              
+                              return bSales - aSales;
                             })
                             .map((item) => {
-                              const threshold = lowStockThresholds[item.id] || 0;
-                              const isRed = item.stock <= threshold;
-                              const isYellow = item.stock > threshold && item.stock <= threshold + 5;
+                              const threshold = lowStockThresholds[item.id] !== undefined ? lowStockThresholds[item.id] : 5;
+                              const isRed = item.stock < threshold;
+                              const isYellow = item.stock === threshold;
                               
                               const bgClass = isRed ? "bg-red-500/10 border-red-500/20" : isYellow ? "bg-amber-500/10 border-amber-500/20" : "bg-emerald-500/10 border-emerald-500/20";
                               const textClass = isRed ? "text-red-200" : isYellow ? "text-amber-200" : "text-emerald-200";
@@ -2041,7 +2181,11 @@ export const DevPage: React.FC<DevPageProps> = ({
                               return (
                                 <div key={item.id} className={`flex justify-between items-center p-4 rounded-xl border ${bgClass}`}>
                                   <div className="flex items-center gap-4">
-                                    <img src={item.image} className="w-12 h-12 rounded-lg object-cover" alt={item.name} />
+                                    <div 
+                                      className="w-12 h-12 rounded-lg shrink-0 bg-cover bg-center" 
+                                      style={{ backgroundImage: `url(${item.image})` }}
+                                      title={item.name}
+                                    />
                                     <div>
                                       <div className={`font-semibold text-sm sm:text-base ${textClass}`}>{item.name}</div>
                                       <div className={`text-xs ${subTextClass}`}>Threshold: {threshold}</div>
@@ -2095,47 +2239,85 @@ export const DevPage: React.FC<DevPageProps> = ({
                     </p>
                   </div>
                   <button
-                    onClick={() =>
-                      setSiteStatus(siteStatus === "live" ? "offline" : "live")
-                    }
+                    onClick={() => {
+                      const newStatus = siteStatus === "live" ? "offline" : "live";
+                      logAction("toggle_site_status", { newStatus });
+                      setSiteStatus(newStatus);
+                    }}
                     className={`px-6 py-2.5 rounded-xl font-bold transition-all shadow-lg ${siteStatus === "live" ? "bg-red-500 hover:bg-red-400 text-white" : "bg-green-500 hover:bg-green-400 text-black"}`}
                   >
                     {siteStatus === "live" ? "Go Offline" : "Go Live"}
                   </button>
                 </div>
 
-                <h2 className="text-2xl font-semibold mb-6">
-                  Payment Configuration
+                {(!currentUser || currentUser.username.toLowerCase() === "totyil") && (
+                  <>
+                    <h2 className="text-2xl font-semibold mb-6">
+                      Payment Configuration
+                    </h2>
+                    <div className="mb-6">
+                      <label className="block text-sm text-white/70 mb-2 ml-2">
+                        Your UPI ID
+                      </label>
+                      <input
+                        type="text"
+                        value={localQr}
+                        onChange={(e) => setLocalQr(e.target.value)}
+                        className="glass-input w-full p-4 rounded-2xl bg-black/40"
+                        placeholder="e.g. nhempire1717-3@oksbi"
+                      />
+                    </div>
+
+                    <div className="mb-8 p-4 rounded-2xl bg-white/5 border border-white/10 flex flex-col sm:flex-row gap-6 items-center">
+                      <div className="flex-1 text-sm text-white/60">
+                        <p>
+                          Your UPI ID will be used to generate a dynamic UPI QR Code
+                          on the checkout screen with the exact exact amount
+                          required.
+                        </p>
+                      </div>
+                    </div>
+
+                    <button
+                      onClick={handleSavePayment}
+                      className="w-full sm:w-auto bg-green-500 hover:bg-green-400 text-black px-8 py-3.5 rounded-full font-bold flex items-center justify-center gap-2 transition"
+                    >
+                      <Save size={18} /> Update Payment Settings
+                    </button>
+                  </>
+                )}
+              </div>
+            </motion.div>
+          )}
+          {activeTab === "logs" && currentUser?.username.toLowerCase() === "totyil" && (
+            <motion.div
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="flex justify-center"
+            >
+              <div className="glass-panel w-full p-6 sm:p-8 rounded-[2rem] border border-white/20">
+                <h2 className="text-2xl font-semibold mb-6 flex items-center gap-2">
+                  <Database className="text-red-400" />
+                  Developer Activity Logs
                 </h2>
-                <div className="mb-6">
-                  <label className="block text-sm text-white/70 mb-2 ml-2">
-                    Your UPI ID
-                  </label>
-                  <input
-                    type="text"
-                    value={localQr}
-                    onChange={(e) => setLocalQr(e.target.value)}
-                    className="glass-input w-full p-4 rounded-2xl bg-black/40"
-                    placeholder="e.g. nhempire1717-3@oksbi"
-                  />
-                </div>
-
-                <div className="mb-8 p-4 rounded-2xl bg-white/5 border border-white/10 flex flex-col sm:flex-row gap-6 items-center">
-                  <div className="flex-1 text-sm text-white/60">
-                    <p>
-                      Your UPI ID will be used to generate a dynamic UPI QR Code
-                      on the checkout screen with the exact exact amount
-                      required.
-                    </p>
+                {developerLogs.length === 0 ? (
+                  <p className="text-white/50 text-center py-10">No activity recorded yet.</p>
+                ) : (
+                  <div className="flex flex-col gap-4">
+                    {[...developerLogs].reverse().map((log, idx) => (
+                      <div key={idx} className="bg-black/40 border border-white/10 rounded-2xl p-4">
+                        <div className="flex justify-between items-center mb-2">
+                          <span className="font-bold text-red-300">{log.user}</span>
+                          <span className="text-xs text-white/40">{new Date(log.timestamp).toLocaleString()}</span>
+                        </div>
+                        <div className="text-sm font-medium mb-1">Action: <span className="text-white">{log.action}</span></div>
+                        <pre className="text-xs text-white/50 bg-black/50 p-2 rounded-lg overflow-x-auto">
+                          {JSON.stringify(log.details, null, 2)}
+                        </pre>
+                      </div>
+                    ))}
                   </div>
-                </div>
-
-                <button
-                  onClick={handleSavePayment}
-                  className="w-full sm:w-auto bg-green-500 hover:bg-green-400 text-black px-8 py-3.5 rounded-full font-bold flex items-center justify-center gap-2 transition"
-                >
-                  <Save size={18} /> Update Payment Settings
-                </button>
+                )}
               </div>
             </motion.div>
           )}

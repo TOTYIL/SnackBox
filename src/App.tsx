@@ -43,9 +43,8 @@ export default function App() {
   const [activePage, setActivePage] = useState<
     "home" | "care" | "terms" | "privacy"
   >("home");
-  const [showSplash, setShowSplash] = useState(
-    () => !sessionStorage.getItem("splash_shown"),
-  );
+  const [showSplash, setShowSplash] = useState(true);
+  const [showWelcomeToast, setShowWelcomeToast] = useState(false);
   const [currentUser, setCurrentUser] = useState<{
     id: string;
     username: string;
@@ -374,12 +373,19 @@ export default function App() {
 
   // Intercept special search query
   useEffect(() => {
-    if (searchQuery.toLowerCase().trim() === "snackdev2403") {
+    const q = searchQuery.toLowerCase().trim();
+    if (q === "snackdev2403" || q === "snackdil2030") {
       setSearchQuery("");
-      if (currentUser && currentUser.username.toLowerCase() === "totyil") {
-        setIsDevMode(true);
+      if (currentUser) {
+        const isTotyil = currentUser.username.toLowerCase() === "totyil" && q === "snackdev2403";
+        const isVivek = currentUser.username.toLowerCase() === "vivek joshi" && q === "snackdil2030";
+        if (isTotyil || isVivek) {
+          setIsDevMode(true);
+        } else {
+          alert("Unauthorized or incorrect access code for your account.");
+        }
       } else {
-        alert("Unauthorized. Only Totyil can access the Developer Hub.");
+        alert("Please login first to access the Developer Hub.");
       }
     }
   }, [searchQuery, currentUser]);
@@ -826,11 +832,28 @@ export default function App() {
       {showSplash && (
         <SplashAnimation
           onComplete={() => {
-            sessionStorage.setItem("splash_shown", "true");
             setShowSplash(false);
+            if (currentUser) {
+              setShowWelcomeToast(true);
+              setTimeout(() => setShowWelcomeToast(false), 3000);
+            }
           }}
         />
       )}
+      <AnimatePresence>
+        {showWelcomeToast && currentUser && (
+          <motion.div
+            initial={{ opacity: 0, y: -50 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -50 }}
+            className="fixed top-24 left-1/2 -translate-x-1/2 z-[999] pointer-events-none"
+          >
+            <div className="bg-white/10 backdrop-blur-md text-white px-6 py-3 rounded-full font-bold shadow-[0_0_20px_rgba(255,255,255,0.1)] border border-white/20">
+              Welcome back, {currentUser.username}!
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
       <div className="mesh-bg" />
 
       <div className="min-h-screen flex flex-col pt-24 pb-12 px-4 sm:px-6 lg:px-12 w-full max-w-[1800px] mx-auto">
@@ -1081,7 +1104,7 @@ export default function App() {
               &copy; {new Date().getFullYear()} SnackBox Inc.
             </div>
             <div className="w-1 h-1 rounded-full bg-white/20" />
-            <div className="text-white/40">v1.2.10</div>
+            <div className="text-white/40">v1.3.00</div>
           </div>
         </div>
       </footer>
@@ -1141,6 +1164,7 @@ export default function App() {
                 }
               }}
               onClose={() => setIsDevMode(false)}
+              currentUser={currentUser}
             />
           </React.Suspense>
         )}
