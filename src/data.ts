@@ -33,6 +33,7 @@ export interface Order {
   prepaidDiscount?: number;
   cravePointsDisabled?: boolean;
   dbRoom?: string;
+  shakeSeen?: boolean;
 }
 
 export const categories = [

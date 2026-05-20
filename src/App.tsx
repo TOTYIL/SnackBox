@@ -35,6 +35,7 @@ export default function App() {
   const [productsList, setProductsList] = useState<Product[]>([]);
   const [upiId, setUpiId] = useState("nhempire1717-3@oksbi");
   const [isDevMode, setIsDevMode] = useState(false);
+  const [isShakeMode, setIsShakeMode] = useState(false);
   const [isCartOpen, setIsCartOpen] = useState(false);
   const [isCheckoutOpen, setIsCheckoutOpen] = useState(false);
 
@@ -205,10 +206,10 @@ export default function App() {
 
           const cartTotalItems = items.reduce((acc: number, item: any) => acc + item.quantity, 0);
           const subtotal = items.reduce((acc, item: any) => acc + item.price * item.quantity, 0);
-          const prepaidDiscount = paymentMethod === "prepaid" ? Math.min(0.5, cartTotalItems * 0.1) : 0;
+          const prepaidDiscount = 0;
           const cravePointsDisabled = o.crave_points_disabled === true || (typeof o.room === "string" && o.room.includes("||C:NO"));
 
-          const calculatedTotal = Math.max(0, subtotal - pointsUsed - prepaidDiscount);
+          const calculatedTotal = Math.max(0, (o.total !== undefined && o.total !== null ? Number(o.total) : subtotal) - pointsUsed - prepaidDiscount);
 
           return {
             id: o.id,
@@ -374,13 +375,20 @@ export default function App() {
   // Intercept special search query
   useEffect(() => {
     const q = searchQuery.toLowerCase().trim();
-    if (q === "snackdev2403" || q === "snackdil2030") {
+    if (q === "snackdev2403" || q === "snackdil2030" || q === "shakedil2026") {
       setSearchQuery("");
       if (currentUser) {
         const isTotyil = currentUser.username.toLowerCase() === "totyil" && q === "snackdev2403";
         const isVivek = currentUser.username.toLowerCase() === "vivek joshi" && q === "snackdil2030";
+        const isShakeTotyil = currentUser.username.toLowerCase() === "totyil" && q === "shakedil2026";
+        const isShakePriyanshu = currentUser.username.toLowerCase() === "priyanshu1" && q === "shakedil2026";
+
         if (isTotyil || isVivek) {
           setIsDevMode(true);
+          setIsShakeMode(false);
+        } else if (isShakeTotyil || isShakePriyanshu) {
+          setIsDevMode(true);
+          setIsShakeMode(true);
         } else {
           alert("Unauthorized or incorrect access code for your account.");
         }
@@ -429,7 +437,7 @@ export default function App() {
               : "";
           }),
         ),
-      ).filter(c => c && c.toLowerCase() !== "all"),
+      ).filter((c) => typeof c === "string" && c && c.toLowerCase() !== "all"),
     ];
   }, [productsList]);
 
@@ -502,17 +510,41 @@ export default function App() {
     });
   }, []);
 
+  const handleUpdateOrderItems = async (orderId: string, newItems: any[], newTotal: number) => {
+    if (!supabase) return;
+
+    // First delete existing items
+    const { error: delError } = await supabase.from('order_items').delete().eq('order_id', orderId);
+    if(delError) {
+      console.error("error deleting old items", delError);
+      return;
+    }
+
+    if (newItems.length > 0) {
+       const { error: insError } = await supabase.from('order_items').insert(
+         newItems.map((i: any) => ({
+           order_id: orderId,
+           product_id: i.id,
+           name: i.name,
+           price: i.price,
+           quantity: i.quantity
+         }))
+       );
+       if(insError) {
+         console.error("error inserting new items", insError);
+         return;
+       }
+    }
+  };
+
   const cravePoints = useMemo(() => {
     let earned = 0;
     let used = 0;
-    const RESET_DATE = new Date("2026-05-08T15:00:00Z").getTime();
     
-    orders.forEach((o) => {
-      // Refresh everyone's points to 0 by ignoring old orders
-      if (new Date(o.date).getTime() < RESET_DATE) {
-        return;
-      }
-
+    // Evaluate only the last 10 orders
+    const recentOrders = orders.slice(0, 10);
+    
+    recentOrders.forEach((o) => {
       let pointsUsedInOrder = o.pointsUsed || 0;
       
       if (o.status !== "rejected" && o.status !== "rage_blocked") {
@@ -522,8 +554,11 @@ export default function App() {
       // Do not earn any crave candies at the order they used a discount at
       // Also respect the disabled toggle from DevPage
       if (o.status === "completed" && !o.cravePointsDisabled && pointsUsedInOrder === 0) {
-        // Earn .01 per 5 spent
-        earned += Math.floor(o.total / 5) * 0.01;
+        // Earn .01 per 1 spent (excluding service charge). 
+        // Amount spent without service charge is (items subtotal - discounts)
+        const subtotal = (o.items || []).reduce((acc, i) => acc + i.price * i.quantity, 0);
+        const spentOnItems = Math.max(0, subtotal - pointsUsedInOrder - (o.prepaidDiscount || 0));
+        earned += Math.floor(spentOnItems) * 0.01;
       }
     });
     return Math.max(0, earned - used);
@@ -557,11 +592,15 @@ export default function App() {
     id: string;
     paymentMethod?: "cod" | "prepaid";
     pointsUsed?: number;
+    serviceCharge?: number;
   }) => {
     let orderTotal = cartItems.reduce(
       (acc, item) => acc + item.price * item.quantity,
       0,
     );
+    if (customerData.serviceCharge) {
+      orderTotal += customerData.serviceCharge;
+    }
     const cartTotalItems = cartItems.reduce(
       (acc, item) => acc + item.quantity,
       0,
@@ -577,11 +616,7 @@ export default function App() {
       orderTotal -= Math.min(orderTotal, actualPointsUsed);
     }
 
-    if (customerData.paymentMethod === "prepaid") {
-      const discount = Math.min(0.5, cartTotalItems * 0.1);
-      orderTotal -= discount;
-      orderTotal = Math.max(0, orderTotal);
-    }
+    // No prepaid discount applied here anymore
 
     const newOrder: Order = {
       id: customerData.id,
@@ -1104,7 +1139,7 @@ export default function App() {
               &copy; {new Date().getFullYear()} SnackBox Inc.
             </div>
             <div className="w-1 h-1 rounded-full bg-white/20" />
-            <div className="text-white/40">v1.3.00</div>
+            <div className="text-white/40">v1.3.01</div>
           </div>
         </div>
       </footer>
@@ -1163,8 +1198,13 @@ export default function App() {
                     .eq("id", "site_status");
                 }
               }}
-              onClose={() => setIsDevMode(false)}
+              onClose={() => {
+                setIsDevMode(false);
+                setIsShakeMode(false);
+              }}
               currentUser={currentUser}
+              isShakeMode={isShakeMode}
+              onUpdateOrderItems={handleUpdateOrderItems}
             />
           </React.Suspense>
         )}
@@ -1176,6 +1216,8 @@ export default function App() {
         onClose={() => setIsTrackerOpen(false)}
         currentUser={currentUser}
         cravePoints={cravePoints}
+        products={productsList}
+        onUpdateOrderItems={handleUpdateOrderItems}
         onClearOrder={(id) => {
           const newIds = [...dismissedOrderIds, id];
           localStorage.setItem("dismissed_orders", JSON.stringify(newIds));

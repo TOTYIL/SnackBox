@@ -32,6 +32,8 @@ import {
   CartesianGrid,
 } from "recharts";
 
+import { EditOrderModal } from "./EditOrderModal";
+
 interface DevPageProps {
   products: Product[];
   setProducts: (products: Product[]) => void;
@@ -41,6 +43,8 @@ interface DevPageProps {
   setSiteStatus: (s: "live" | "offline") => void;
   onClose: () => void;
   currentUser?: { id: string; username: string; } | null;
+  isShakeMode?: boolean;
+  onUpdateOrderItems?: (orderId: string, newItems: any[], newTotal: number) => Promise<void>;
 }
 
 export const DevPage: React.FC<DevPageProps> = ({
@@ -52,6 +56,8 @@ export const DevPage: React.FC<DevPageProps> = ({
   setSiteStatus,
   onClose,
   currentUser,
+  isShakeMode,
+  onUpdateOrderItems,
 }) => {
   const [orders, setOrders] = useState<Order[]>([]);
   const [localProducts, setLocalProducts] = useState([...products]);
@@ -108,6 +114,7 @@ export const DevPage: React.FC<DevPageProps> = ({
   const [editingItemId, setEditingItemId] = useState<string | null>(null);
   const [newlyAddedIds, setNewlyAddedIds] = useState<Record<string, boolean>>({});
   const [clearingIds, setClearingIds] = useState<Record<string, boolean>>({});
+  const [editingOrderId, setEditingOrderId] = useState<string | null>(null);
   const timeoutRefs = useRef<Record<string, NodeJS.Timeout>>({});
 
   useEffect(() => {
@@ -122,7 +129,7 @@ export const DevPage: React.FC<DevPageProps> = ({
     return () => {
       // Clear all timers on unmount to prevent leaks
       Object.entries(timeoutRefs.current).forEach(([id, timer]) => {
-        clearTimeout(timer);
+        clearTimeout(timer as any);
         deleteOrderImmediately(id);
       });
     };
@@ -216,10 +223,11 @@ export const DevPage: React.FC<DevPageProps> = ({
 
           const cartTotalItems = items.reduce((acc: number, item: any) => acc + item.quantity, 0);
           const subtotal = items.reduce((acc, item: any) => acc + item.price * item.quantity, 0);
-          const prepaidDiscount = paymentMethod === "prepaid" ? Math.min(0.5, cartTotalItems * 0.1) : 0;
+          const prepaidDiscount = 0;
           const cravePointsDisabled = o.crave_points_disabled === true || (typeof o.room === "string" && o.room.includes("||C:NO"));
+          const shakeSeen = typeof o.room === "string" && o.room.includes("||S:OK");
 
-          const calculatedTotal = Math.max(0, subtotal - pointsUsed - prepaidDiscount);
+          const calculatedTotal = Math.max(0, (o.total !== undefined && o.total !== null ? Number(o.total) : subtotal) - pointsUsed - prepaidDiscount);
 
           return {
             id: o.id,
@@ -232,12 +240,40 @@ export const DevPage: React.FC<DevPageProps> = ({
             pointsUsed,
             prepaidDiscount,
             cravePointsDisabled,
+            shakeSeen,
             date: o.date,
             total: calculatedTotal,
             status: statusToUse,
             items,
           };
+        })
+        .filter((o) => {
+          if (!isShakeMode) return true;
+          // In shake mode, only show orders after they are accepted
+          if (statusToUse !== "accepted" && statusToUse !== "completed") return false;
+
+          return o.items.some((i: any) => {
+            const prod = products.find(p => p.id === i.id);
+            return i.name.toLowerCase().includes("shake") || i.name.toLowerCase().includes("cold coffee") || (prod?.category || "").toLowerCase().includes("shake");
+          });
+        })
+        .map((o) => {
+          if (!isShakeMode) return o;
+          const shakeItems = o.items.filter((i: any) => {
+            const prod = products.find(p => p.id === i.id);
+            return i.name.toLowerCase().includes("shake") || i.name.toLowerCase().includes("cold coffee") || (prod?.category || "").toLowerCase().includes("shake");
+          });
+          const shakesTotal = shakeItems.reduce(
+            (acc: number, i: any) => acc + i.price * i.quantity,
+            0,
+          );
+          return {
+            ...o,
+            items: shakeItems,
+            total: shakesTotal,
+          };
         });
+
       setOrders((prev) => {
         if (JSON.stringify(prev) === JSON.stringify(newOrders)) return prev;
         return newOrders as Order[];
@@ -376,6 +412,18 @@ export const DevPage: React.FC<DevPageProps> = ({
     await supabase.from("orders").update({ room: newDbRoom }).eq("id", orderId);
   };
 
+  const handleShakeSeen = async (orderId: string, currentDbRoom: string | undefined) => {
+    let base = currentDbRoom || "";
+    if (!base.includes("||S:OK")) {
+        const newDbRoom = base + "||S:OK";
+        logAction("shake_seen", { orderId, newDbRoom });
+        setOrders(prev => prev.map(o => o.id === orderId ? { ...o, dbRoom: newDbRoom, shakeSeen: true } : o));
+        if (supabase) {
+           await supabase.from("orders").update({ room: newDbRoom }).eq("id", orderId);
+        }
+    }
+  };
+
   const deleteOrderImmediately = async (id: string) => {
     logAction("delete_order", { id });
     // Also delete from Supabase using the secure RPC so spam is actually removed
@@ -467,9 +515,13 @@ export const DevPage: React.FC<DevPageProps> = ({
   });
   const [isAllExpanded, setIsAllExpanded] = useState(false);
 
-  const pendingOrdersCount = orders.filter(
-    (o) => o.status === "pending",
-  ).length;
+  const pendingOrdersCount = orders.filter((o) => {
+    if (isShakeMode) {
+      // In shake mode, orders are only visible after acceptance, and they should ring if not yet acknowledged
+      return (o.status === "accepted" || o.status === "completed") && !o.shakeSeen;
+    }
+    return o.status === "pending";
+  }).length;
 
   const hasPendingOrders = pendingOrdersCount > 0;
 
@@ -724,7 +776,7 @@ export const DevPage: React.FC<DevPageProps> = ({
       supabase.from("payment_config").upsert({
         id: "developer_logs",
         qr_code_url: JSON.stringify(newLogs)
-      }).then().catch(console.error);
+      }).then(() => {}, console.error);
 
       return newLogs;
     });
@@ -849,7 +901,7 @@ export const DevPage: React.FC<DevPageProps> = ({
               <ArrowLeft size={20} />
             </button>
             <h1 className="text-2xl sm:text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-pink-400 to-indigo-400">
-              Developer Hub
+              {isShakeMode ? "Shake Portal" : "Developer Hub"}
             </h1>
           </div>
 
@@ -874,15 +926,17 @@ export const DevPage: React.FC<DevPageProps> = ({
               <PackageSearch size={18} className="shrink-0" />{" "}
               <span className="hidden sm:inline">Inventory</span>
             </button>
-            <button
-              onClick={() => setActiveTab("payment")}
-              className={`flex flex-1 justify-center items-center gap-2 px-3 sm:px-5 py-3 rounded-t-xl transition-colors font-medium text-sm sm:text-base ${activeTab === "payment" ? "bg-white/10 text-white border-b-2 border-green-400" : "text-white/60 hover:text-white"}`}
-            >
-              <CreditCard size={18} className="shrink-0" />{" "}
-              <span className="hidden sm:inline">
-                {(!currentUser || currentUser.username.toLowerCase() === "totyil") ? "Payment Config" : "Site Config"}
-              </span>
-            </button>
+            {!isShakeMode && (
+              <button
+                onClick={() => setActiveTab("payment")}
+                className={`flex flex-1 justify-center items-center gap-2 px-3 sm:px-5 py-3 rounded-t-xl transition-colors font-medium text-sm sm:text-base ${activeTab === "payment" ? "bg-white/10 text-white border-b-2 border-green-400" : "text-white/60 hover:text-white"}`}
+              >
+                <CreditCard size={18} className="shrink-0" />{" "}
+                <span className="hidden sm:inline">
+                  {(!currentUser || currentUser.username.toLowerCase() === "totyil") ? "Payment Config" : "Site Config"}
+                </span>
+              </button>
+            )}
             <button
               onClick={() => setActiveTab("analytics")}
               className={`flex flex-1 justify-center items-center gap-2 px-3 sm:px-5 py-3 rounded-t-xl transition-colors font-medium text-sm sm:text-base ${activeTab === "analytics" ? "bg-white/10 text-white border-b-2 border-orange-400" : "text-white/60 hover:text-white"}`}
@@ -890,7 +944,7 @@ export const DevPage: React.FC<DevPageProps> = ({
               <BarChart3 size={18} className="shrink-0" />{" "}
               <span className="hidden sm:inline">Analytics</span>
             </button>
-            {currentUser?.username.toLowerCase() === "totyil" && (
+            {currentUser?.username.toLowerCase() === "totyil" && !isShakeMode && (
               <button
                 onClick={() => setActiveTab("logs")}
                 className={`flex flex-1 justify-center items-center gap-2 px-3 sm:px-5 py-3 rounded-t-xl transition-colors font-medium text-sm sm:text-base ${activeTab === "logs" ? "bg-white/10 text-white border-b-2 border-red-400" : "text-white/60 hover:text-white"}`}
@@ -947,12 +1001,20 @@ export const DevPage: React.FC<DevPageProps> = ({
                               {new Date(order.date).toLocaleString()}
                             </p>
                           </div>
-                          <div className="shrink-0">
+                          <div className="shrink-0 flex flex-col items-end gap-2">
                             <span
                               className={`glass-pill px-3 py-1 text-xs font-semibold uppercase tracking-wider ${statusColors[order.computedStatus]}`}
                             >
                               {order.computedStatus}
                             </span>
+                            {!order.isOld && order.computedStatus !== "completed" && order.computedStatus !== "rejected" && order.computedStatus !== "rage_blocked" && (
+                              <button
+                                onClick={() => setEditingOrderId(order.id)}
+                                className="text-xs font-bold text-indigo-300 hover:text-white transition-colors bg-indigo-500/20 hover:bg-indigo-500/40 py-1 px-3 rounded-full"
+                              >
+                                Edit Order
+                              </button>
+                            )}
                           </div>
                         </div>
 
@@ -1055,13 +1117,30 @@ export const DevPage: React.FC<DevPageProps> = ({
                               </span>
                             </div>
                           )}
+
+                          {order.shakeSeen && !isShakeMode && (
+                            <div className="mt-4 flex items-center gap-2 text-indigo-300 bg-indigo-500/10 px-3 py-1.5 rounded-lg w-fit text-sm font-medium">
+                              <Check size={16} /> Shake Dev Seen
+                            </div>
+                          )}
                         </div>
 
                         {/* Action Buttons */}
                         {!order.isOld &&
                           order.computedStatus !== "completed" && (
                             <div className="flex flex-wrap gap-3 mt-4 pt-4 border-t border-white/10">
-                              {order.computedStatus === "pending" && (
+                              {isShakeMode ? (
+                                !order.shakeSeen && (
+                                  <button
+                                    onClick={() => handleShakeSeen(order.id, order.dbRoom)}
+                                    className="flex items-center justify-center gap-2 flex-1 bg-green-500/20 text-green-300 hover:bg-green-500/30 transition py-2.5 rounded-xl font-medium"
+                                  >
+                                    <Check size={16} /> OK
+                                  </button>
+                                )
+                              ) : (
+                                <>
+                                  {order.computedStatus === "pending" && (
                                 <>
                                   <button
                                     onClick={() =>
@@ -1143,6 +1222,8 @@ export const DevPage: React.FC<DevPageProps> = ({
                                   <RotateCcw size={16} /> Revert to Pending
                                 </button>
                               )}
+                            </>
+                          )}
                             </div>
                           )}
 
@@ -1302,21 +1383,31 @@ export const DevPage: React.FC<DevPageProps> = ({
                                                 ).toLocaleString()}
                                               </p>
                                             </div>
-                                            <div className="flex items-center gap-2 shrink-0">
-                                              <span
-                                                className={`glass-pill px-3 py-1 text-xs font-semibold uppercase tracking-wider ${/*ts-ignore*/ statusColors[order.computedStatus]}`}
-                                              >
-                                                {order.computedStatus}
-                                              </span>
-                                              <button
-                                                onClick={() =>
-                                                  deleteOrder(order.id)
-                                                }
-                                                className="text-white/30 hover:text-white transition-colors bg-white/5 hover:bg-white/10 p-1.5 rounded-full"
-                                                title="Delete Order"
-                                              >
-                                                <X size={16} />
-                                              </button>
+                                            <div className="flex flex-col items-end gap-2 shrink-0">
+                                              <div className="flex items-center gap-2">
+                                                <span
+                                                  className={`glass-pill px-3 py-1 text-xs font-semibold uppercase tracking-wider ${/*ts-ignore*/ statusColors[order.computedStatus]}`}
+                                                >
+                                                  {order.computedStatus}
+                                                </span>
+                                                <button
+                                                  onClick={() =>
+                                                    deleteOrder(order.id)
+                                                  }
+                                                  className="text-white/30 hover:text-white transition-colors bg-white/5 hover:bg-white/10 p-1.5 rounded-full"
+                                                  title="Delete Order"
+                                                >
+                                                  <X size={16} />
+                                                </button>
+                                              </div>
+                                              {!order.isOld && order.computedStatus !== "completed" && order.computedStatus !== "rejected" && order.computedStatus !== "rage_blocked" && (
+                                                <button
+                                                  onClick={() => setEditingOrderId(order.id)}
+                                                  className="text-xs font-bold text-indigo-300 hover:text-white transition-colors bg-indigo-500/20 hover:bg-indigo-500/40 py-1 px-3 rounded-full"
+                                                >
+                                                  Edit Order
+                                                </button>
+                                              )}
                                             </div>
                                           </div>
 
@@ -1540,6 +1631,10 @@ export const DevPage: React.FC<DevPageProps> = ({
                     if (aIsNewEditing && !bIsNewEditing) return -1;
                     if (bIsNewEditing && !aIsNewEditing) return 1;
                     return (a.name || "").localeCompare(b.name || "");
+                  })
+                  .filter(product => {
+                    if (!isShakeMode) return true;
+                    return (product.name || "").toLowerCase().includes("shake") || (product.category || "").toLowerCase().includes("shake");
                   })
                   .map((product) => (
                   <div
@@ -1828,7 +1923,7 @@ export const DevPage: React.FC<DevPageProps> = ({
                   if (o.userId && appUsers[o.userId]) return o.userId;
                   // Try to find matching username
                   const match = Object.entries(appUsers).find(([_, name]) => 
-                    name.toLowerCase() === (o.customerName || "").toLowerCase()
+                    typeof name === "string" && name.toLowerCase() === (o.customerName || "").toLowerCase()
                   );
                   return match ? match[0] : null;
                 };
@@ -1836,7 +1931,7 @@ export const DevPage: React.FC<DevPageProps> = ({
                 Object.entries(appUsers).forEach(([id, name]) => {
                   customerStats[id] = {
                     id: id,
-                    name: name,
+                    name: typeof name === "string" ? name : "Unknown",
                     phone: "N/A",
                     room: "N/A",
                     totalSpent: 0,
@@ -1849,52 +1944,89 @@ export const DevPage: React.FC<DevPageProps> = ({
                 });
 
                 completedOrders.forEach(o => {
-                  const finalTotal = o.total;
-                  totalRevenue += finalTotal;
+                  let finalTotal = o.total;
                   
                   let orderCost = 0;
+                  let shakeCostInOrder = 0;
+                  let shakeRevenueInOrder = 0;
 
                   o.items.forEach(item => {
-                    totalItemsSold += item.quantity;
                     const cost = costPrices[item.id] || 0;
                     const itemTotalCost = cost * item.quantity;
+                    
+                    const prod = localProducts.find((p) => p.id === item.id);
+                    const isShake = item.name.toLowerCase().includes("shake") || item.name.toLowerCase().includes("cold coffee") || (prod?.category || "").toLowerCase().includes("shake");
+
+                    const orderSubtotal = o.items ? o.items.reduce((acc, i) => acc + (i.price * i.quantity), 0) : 0;
+                    const itemRevenueShare = orderSubtotal > 0 ? (item.price * item.quantity) / orderSubtotal : 0; // Rough estimate of its contribution to finalTotal
+                    const itemRevenue = finalTotal * itemRevenueShare;
+
+                    if (isShake && !isShakeMode) {
+                        shakeCostInOrder += itemTotalCost;
+                        shakeRevenueInOrder += itemRevenue;
+                        return;
+                    }
+
                     orderCost += itemTotalCost;
+                    totalItemsSold += item.quantity;
 
                     if (!itemStats[item.id]) {
                       itemStats[item.id] = { id: item.id, name: item.name, quantity: 0, revenue: 0, profit: 0 };
                     }
                     itemStats[item.id].quantity += item.quantity;
-                    const orderSubtotal = o.items ? o.items.reduce((acc, i) => acc + (i.price * i.quantity), 0) : 0;
-                    const itemRevenueShare = orderSubtotal > 0 ? (item.price * item.quantity) / orderSubtotal : 0; // Rough estimate of its contribution to finalTotal
-                    const itemRevenue = finalTotal * itemRevenueShare;
-
                     itemStats[item.id].revenue += itemRevenue;
                     itemStats[item.id].profit += (itemRevenue - itemTotalCost);
                   });
 
-                  const orderProfit = Math.max(0, finalTotal - orderCost);
-                  totalProfit += orderProfit;
+                  if (!isShakeMode) {
+                    totalRevenue += Math.max(0, finalTotal - shakeRevenueInOrder);
+                    const orderProfit = Math.max(0, (finalTotal - shakeRevenueInOrder) - orderCost);
+                    totalProfit += orderProfit;
 
-                  // Find registered user
-                  const orderIdentifier = getRegisteredUserId(o);
-                  if (!orderIdentifier) return; // Skip non-registered users for customer insights
+                    const orderIdentifier = getRegisteredUserId(o);
+                    if (!orderIdentifier) return;
+                    const cStat = customerStats[orderIdentifier];
+                    if (cStat.phone === "N/A" && o.phone) cStat.phone = o.phone;
+                    if (cStat.room === "N/A" && o.room) cStat.room = o.room;
+                    
+                    cStat.totalSpent += Math.max(0, finalTotal - shakeRevenueInOrder);
+                    cStat.ordersCount += 1;
+                    const orderDate = new Date(o.date);
+                    const hour = orderDate.getHours();
+                    cStat.hours[hour] = (cStat.hours[hour] || 0) + 1;
+                    cStat.profit += orderProfit;
 
-                  const cStat = customerStats[orderIdentifier];
-                  if (cStat.phone === "N/A" && o.phone) cStat.phone = o.phone;
-                  if (cStat.room === "N/A" && o.room) cStat.room = o.room;
-                  
-                  cStat.totalSpent += finalTotal;
-                  cStat.ordersCount += 1;
-                  const orderDate = new Date(o.date);
-                  const hour = orderDate.getHours();
-                  cStat.hours[hour] = (cStat.hours[hour] || 0) + 1;
+                    o.items.forEach(item => {
+                      const prod = localProducts.find((p) => p.id === item.id);
+                      const isShake = item.name.toLowerCase().includes("shake") || item.name.toLowerCase().includes("cold coffee") || (prod?.category || "").toLowerCase().includes("shake");
+                      if (isShake) return;
 
-                  o.items.forEach(item => {
-                    cStat.itemsCount += item.quantity;
-                    cStat.products[item.name] = (cStat.products[item.name] || 0) + item.quantity;
-                  });
+                      cStat.itemsCount += item.quantity;
+                      cStat.products[item.name] = (cStat.products[item.name] || 0) + item.quantity;
+                    });
+                  } else {
+                    totalRevenue += finalTotal;
+                    const orderProfit = Math.max(0, finalTotal - orderCost);
+                    totalProfit += orderProfit;
 
-                  cStat.profit += orderProfit;
+                    const orderIdentifier = getRegisteredUserId(o);
+                    if (!orderIdentifier) return;
+                    const cStat = customerStats[orderIdentifier];
+                    if (cStat.phone === "N/A" && o.phone) cStat.phone = o.phone;
+                    if (cStat.room === "N/A" && o.room) cStat.room = o.room;
+
+                    cStat.totalSpent += finalTotal;
+                    cStat.ordersCount += 1;
+                    const orderDate = new Date(o.date);
+                    const hour = orderDate.getHours();
+                    cStat.hours[hour] = (cStat.hours[hour] || 0) + 1;
+                    cStat.profit += orderProfit;
+
+                    o.items.forEach(item => {
+                      cStat.itemsCount += item.quantity;
+                      cStat.products[item.name] = (cStat.products[item.name] || 0) + item.quantity;
+                    });
+                  }
                 });
 
                 const allItemsData = Object.values(itemStats)
@@ -1951,7 +2083,14 @@ export const DevPage: React.FC<DevPageProps> = ({
                           className="glass-panel p-6 rounded-3xl border border-white/10 text-left hover:bg-amber-500/10 transition-colors"
                         >
                           <div className="text-white/50 text-xs sm:text-sm mb-1 uppercase tracking-wider">Low Stock Alerts</div>
-                          <div className="text-xl sm:text-3xl font-bold text-red-400">{localProducts.filter(p => p.stock <= (lowStockThresholds[p.id] !== undefined ? lowStockThresholds[p.id] : 5)).length}</div>
+                          <div className="text-xl sm:text-3xl font-bold text-red-400">{localProducts.filter(p => {
+                            if (isShakeMode) {
+                              if (!(p.name.toLowerCase().includes("shake") || p.name.toLowerCase().includes("cold coffee") || (p.category || "").toLowerCase().includes("shake"))) {
+                                return false;
+                              }
+                            }
+                            return p.stock <= (lowStockThresholds[p.id] !== undefined ? lowStockThresholds[p.id] : 5);
+                          }).length}</div>
                         </button>
                       </div>
                     )}
@@ -2152,6 +2291,10 @@ export const DevPage: React.FC<DevPageProps> = ({
                         <h3 className="text-lg font-bold mb-4">Stock Levels</h3>
                         <div className="flex-1 overflow-y-auto pr-2 space-y-2">
                           {localProducts
+                            .filter(p => {
+                              if (!isShakeMode) return true;
+                              return p.name.toLowerCase().includes("shake") || p.name.toLowerCase().includes("cold coffee") || (p.category || "").toLowerCase().includes("shake");
+                            })
                             .sort((a,b) => {
                               const aThreshold = lowStockThresholds[a.id] !== undefined ? lowStockThresholds[a.id] : 5;
                               const bThreshold = lowStockThresholds[b.id] !== undefined ? lowStockThresholds[b.id] : 5;
@@ -2323,6 +2466,15 @@ export const DevPage: React.FC<DevPageProps> = ({
           )}
         </div>
       </div>
+      
+      {editingOrderId && onUpdateOrderItems && (
+        <EditOrderModal
+          order={orders.find(o => o.id === editingOrderId)!}
+          products={products}
+          onClose={() => setEditingOrderId(null)}
+          onSave={onUpdateOrderItems}
+        />
+      )}
     </motion.div>
   );
 };

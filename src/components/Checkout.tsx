@@ -27,6 +27,7 @@ interface CheckoutModalProps {
     id: string;
     paymentMethod?: "cod" | "prepaid";
     pointsUsed?: number;
+    serviceCharge?: number;
   }) => void;
 }
 
@@ -50,23 +51,27 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
   >("details");
   const [paymentCode, setPaymentCode] = useState("");
 
+  const [name, setName] = useState(() => localStorage.getItem("snackbox_name") || "");
+  const [phone, setPhone] = useState(() => localStorage.getItem("snackbox_phone") || "");
+  const [hostel, setHostel] = useState(() => localStorage.getItem("snackbox_hostel") || "Gaumukh");
+  const [room, setRoom] = useState(() => localStorage.getItem("snackbox_room") || "");
+
+  const serviceCharge = hostel === "Gaumukh" ? 0 : 30;
+
   const [usePoints, setUsePoints] = useState(false);
   const pointsToRedeem =
     usePoints && cravePoints > 0 ? cravePoints : 0;
-  const finalTotal = Math.max(0, total - pointsToRedeem);
-  const discountAmount = Math.min(0.5, cartTotalItems * 0.1);
-  const prepaidTotal = Math.max(0, finalTotal - discountAmount);
+  const finalTotal = Math.max(0, total + serviceCharge - pointsToRedeem);
+  const prepaidTotal = finalTotal;
 
   const upiLink = `upi://pay?pa=${encodeURIComponent(upiId.trim())}&pn=${encodeURIComponent("SnackBox")}&tn=${encodeURIComponent(`Order Code: ${paymentCode}`)}&am=${prepaidTotal.toFixed(2)}&cu=INR`;
 
-  // Form State
-  const [name, setName] = useState(() => localStorage.getItem("snackbox_name") || "");
-  const [phone, setPhone] = useState(() => localStorage.getItem("snackbox_phone") || "");
-  const [room, setRoom] = useState(() => localStorage.getItem("snackbox_room") || "");
+  const [showMinOrderError, setShowMinOrderError] = useState(false);
 
   useEffect(() => {
     if (isOpen) {
       setStep("details");
+      setShowMinOrderError(false);
       setUsePoints(false);
 
       const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
@@ -80,9 +85,16 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
 
   const handleProceedToMethod = (e: React.FormEvent) => {
     e.preventDefault();
-    if (name && phone && room) {
+    if (name && phone && room && hostel) {
+      if (hostel !== "Gaumukh" && total < 150) {
+        setShowMinOrderError(true);
+        setTimeout(() => setShowMinOrderError(false), 4000);
+        return;
+      }
+      setShowMinOrderError(false);
       localStorage.setItem("snackbox_name", name);
       localStorage.setItem("snackbox_phone", phone);
+      localStorage.setItem("snackbox_hostel", hostel);
       localStorage.setItem("snackbox_room", room);
 
       if (finalTotal <= 0) {
@@ -154,10 +166,11 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
     onComplete({
       name,
       phone,
-      room,
+      room: `${hostel} - ${room}`,
       id: paymentCode,
       paymentMethod: method,
       pointsUsed: pointsToRedeem,
+      serviceCharge,
     }); // Send DB request immediately so it processes in background
 
     setTimeout(() => {
@@ -182,7 +195,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
             initial={{ opacity: 0, scale: 0.95, y: 20 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.95, y: 20 }}
-            className="glass-panel w-full max-w-md rounded-[2.5rem] p-6 sm:p-8 relative z-10 shadow-2xl border border-white/20"
+            className="glass-panel w-full max-w-md rounded-[2.5rem] p-6 sm:p-8 relative z-10 shadow-2xl border border-white/20 max-h-[90dvh] flex flex-col overflow-y-auto"
           >
             {step !== "success" && (
               <button
@@ -236,6 +249,23 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
                       className="glass-input w-full p-4 rounded-2xl"
                       placeholder="9876543210"
                     />
+                  </div>
+                  <div>
+                    <label className="block text-sm text-white/70 mb-1 ml-1">
+                      Hostel
+                    </label>
+                    <select
+                      required
+                      value={hostel}
+                      onChange={(e) => setHostel(e.target.value)}
+                      className="glass-input w-full p-4 rounded-2xl appearance-none bg-black/40 text-white [&>option]:bg-[#1a1a2e]"
+                    >
+                      <option value="Gaumukh">Gaumukh (Free)</option>
+                      <option value="Aravalli">Aravalli (+₹30 Service Charge)</option>
+                      <option value="Vindhyancal">Vindhyancal (+₹30 Service Charge)</option>
+                      <option value="Nanda Devi">Nanda Devi (+₹30 Service Charge)</option>
+                      <option value="New Boys Hostel">New Boys Hostel (+₹30 Service Charge)</option>
+                    </select>
                   </div>
                   <div>
                     <label className="block text-sm text-white/70 mb-1 ml-1">
@@ -300,10 +330,14 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
                     </label>
 
                     <div className="flex flex-col gap-2 mb-6">
-                      {usePoints && pointsToRedeem > 0 && (
+                      <div className="flex justify-between items-center text-sm text-white/60">
+                        <span>Cart Total</span>
+                        <span>₹{total.toFixed(2)}</span>
+                      </div>
+                      {serviceCharge > 0 && (
                         <div className="flex justify-between items-center text-sm text-white/60">
-                          <span>Subtotal</span>
-                          <span>₹{total.toFixed(2)}</span>
+                          <span>Service Charge ({hostel})</span>
+                          <span>+ ₹{serviceCharge.toFixed(2)}</span>
                         </div>
                       )}
                       {usePoints && pointsToRedeem > 0 && (
@@ -312,7 +346,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
                           <span>- ₹{pointsToRedeem.toFixed(2)}</span>
                         </div>
                       )}
-                      <div className="flex justify-between items-center">
+                      <div className="flex justify-between items-center border-t border-white/10 pt-2 mt-1">
                         <span className="text-white/70">Total Amount</span>
                         <span className="text-2xl font-bold">
                           ₹{finalTotal.toFixed(2)}
@@ -321,20 +355,36 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
                     </div>
                   </div>
 
-                  <button
-                    type="submit"
-                    className="w-full bg-white text-black font-semibold rounded-full p-4 flex items-center justify-center gap-2 hover:bg-gray-200 transition"
-                  >
-                    {finalTotal <= 0 ? (
-                      <>
-                        Complete Order <CheckCircle size={18} />
-                      </>
-                    ) : (
-                      <>
-                        Proceed to Payment <ArrowRight size={18} />
-                      </>
-                    )}
-                  </button>
+                  <div className="relative mt-2">
+                    <AnimatePresence>
+                      {showMinOrderError && (
+                        <motion.div
+                          initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                          animate={{ opacity: 1, y: 0, scale: 1 }}
+                          exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                          className="absolute bottom-[calc(100%+16px)] left-1/2 -translate-x-1/2 w-max max-w-full bg-red-500 text-white text-sm font-bold py-2.5 px-5 rounded-2xl shadow-[0_10px_40px_rgba(239,68,68,0.4)] z-50 pointer-events-none"
+                        >
+                          Minimum order for {hostel} is ₹150
+                          <div className="absolute -bottom-1.5 left-1/2 -translate-x-1/2 w-3 h-3 bg-red-500 rotate-45 transform origin-center rounded-sm" />
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+
+                    <button
+                      type="submit"
+                      className="w-full bg-white text-black font-semibold rounded-full p-4 flex items-center justify-center gap-2 hover:bg-gray-200 transition"
+                    >
+                      {finalTotal <= 0 ? (
+                        <>
+                          Complete Order <CheckCircle size={18} />
+                        </>
+                      ) : (
+                        <>
+                          Proceed to Payment <ArrowRight size={18} />
+                        </>
+                      )}
+                    </button>
+                  </div>
                 </form>
               </motion.div>
             )}
@@ -374,13 +424,8 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
                         </p>
                       </div>
                     </div>
-                    {/* Fixed height container for discount to ensure equal button heights even if one lacks discount */}
+                    {/* Fixed height container for equal button heights */}
                     <div className="h-6 flex items-center justify-center">
-                      {discountAmount > 0 && (
-                        <p className="text-[10px] sm:text-xs text-green-400 font-medium">
-                          Save ₹{discountAmount.toFixed(2)}!
-                        </p>
-                      )}
                     </div>
                   </button>
 
@@ -482,11 +527,6 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
                 <p className="text-white/60 mb-6 text-sm px-4">
                   Scan the QR code below with any UPI app to pay{" "}
                   <b className="text-white">₹{prepaidTotal.toFixed(2)}</b>
-                  {discountAmount > 0 && (
-                    <span className="block text-green-400 mt-1">
-                      Includes ₹{discountAmount.toFixed(2)} prepaid discount!
-                    </span>
-                  )}
                 </p>
 
                 <div className="bg-white p-4 rounded-3xl mx-auto w-48 h-48 mb-6 relative overflow-hidden flex items-center justify-center">
@@ -545,11 +585,6 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
                   Please complete the payment of{" "}
                   <b className="text-white">₹{prepaidTotal.toFixed(2)}</b> in
                   your UPI app.
-                  {discountAmount > 0 && (
-                    <span className="block text-green-400 mt-1">
-                      Includes ₹{discountAmount.toFixed(2)} prepaid discount!
-                    </span>
-                  )}
                 </p>
 
                 <div className="bg-white/5 border border-white/10 p-6 rounded-3xl mx-auto mb-6 flex items-center justify-center flex-col gap-4">

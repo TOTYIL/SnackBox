@@ -12,6 +12,8 @@ import {
 } from "lucide-react";
 import { Order } from "../data";
 
+import { EditOrderModal } from "./EditOrderModal";
+
 interface OrderTrackerProps {
   orders: Order[];
   isOpen: boolean;
@@ -19,6 +21,8 @@ interface OrderTrackerProps {
   onClearOrder: (id: string) => void;
   currentUser: { username: string } | null;
   cravePoints: number;
+  products: any[];
+  onUpdateOrderItems: (orderId: string, newItems: any[], newTotal: number) => Promise<void>;
 }
 
 export const OrderTracker: React.FC<OrderTrackerProps> = ({
@@ -28,10 +32,13 @@ export const OrderTracker: React.FC<OrderTrackerProps> = ({
   onClearOrder,
   currentUser,
   cravePoints,
+  products,
+  onUpdateOrderItems,
 }) => {
   const [activeTab, setActiveTab] = useState<"tracker" | "profile">("tracker");
   const [clearingIds, setClearingIds] = useState<Record<string, boolean>>({});
   const timeoutRefs = useRef<Record<string, NodeJS.Timeout>>({});
+  const [editingOrderId, setEditingOrderId] = useState<string | null>(null);
 
   const handleDismissOrder = (id: string) => {
     setClearingIds((prev) => ({ ...prev, [id]: true }));
@@ -62,7 +69,7 @@ export const OrderTracker: React.FC<OrderTrackerProps> = ({
     return () => {
       // Clear all timers on unmount to prevent leaks and state updates
       Object.entries(timeoutRefs.current).forEach(([id, timer]) => {
-        clearTimeout(timer);
+        clearTimeout(timer as any);
       });
     };
   }, []);
@@ -168,9 +175,9 @@ export const OrderTracker: React.FC<OrderTrackerProps> = ({
                             </div>
                             <div className="flex flex-col items-end gap-2">
                               <span className="font-black text-transparent bg-clip-text bg-gradient-to-r from-pink-400 to-indigo-400 text-lg">
-                                ₹{Math.max(0, order.total - (order.pointsUsed || 0) - (order.prepaidDiscount || 0)).toFixed(2)}
+                                ₹{order.total.toFixed(2)}
                               </span>
-                              {order.pointsUsed || order.prepaidDiscount ? (
+                              {order.pointsUsed ? (
                                 <div className="text-[10px] text-emerald-400 font-bold bg-emerald-500/10 px-2 py-0.5 rounded-full whitespace-nowrap">
                                   Discount Applied
                                 </div>
@@ -197,6 +204,14 @@ export const OrderTracker: React.FC<OrderTrackerProps> = ({
                                     <X size={12} /> Dismiss
                                   </button>
                                 ))}
+                                {order.status === "pending" && (
+                                   <button
+                                     onClick={() => setEditingOrderId(order.id)}
+                                     className="text-xs font-bold text-indigo-300 hover:text-white transition-colors bg-indigo-500/20 py-1 px-3 rounded-full flex items-center gap-1 mt-1"
+                                   >
+                                     Edit Order
+                                   </button>
+                                )}
                             </div>
                           </div>
 
@@ -359,7 +374,7 @@ export const OrderTracker: React.FC<OrderTrackerProps> = ({
                                 </h4>
                               </div>
                               <p className="text-xs font-medium text-white/50 max-w-[200px] leading-relaxed">
-                                Earn 0.02 Crave Candies per ₹1 spent on
+                                Earn 0.01 Crave Candies per ₹1 spent on
                                 successful deliveries.
                               </p>
                             </div>
@@ -400,6 +415,14 @@ export const OrderTracker: React.FC<OrderTrackerProps> = ({
               </AnimatePresence>
             </div>
           </motion.div>
+          {editingOrderId && (
+            <EditOrderModal
+              order={orders.find((o) => o.id === editingOrderId)!}
+              products={products}
+              onClose={() => setEditingOrderId(null)}
+              onSave={onUpdateOrderItems}
+            />
+          )}
         </>
       )}
     </AnimatePresence>
