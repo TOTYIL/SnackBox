@@ -250,7 +250,7 @@ export const DevPage: React.FC<DevPageProps> = ({
         .filter((o) => {
           if (!isShakeMode) return true;
           // In shake mode, only show orders after they are accepted
-          if (statusToUse !== "accepted" && statusToUse !== "completed") return false;
+          if (o.status !== "accepted" && o.status !== "completed") return false;
 
           return o.items.some((i: any) => {
             const prod = products.find(p => p.id === i.id);

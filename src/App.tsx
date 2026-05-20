@@ -382,11 +382,13 @@ export default function App() {
         const isVivek = currentUser.username.toLowerCase() === "vivek joshi" && q === "snackdil2030";
         const isShakeTotyil = currentUser.username.toLowerCase() === "totyil" && q === "shakedil2026";
         const isShakePriyanshu = currentUser.username.toLowerCase() === "priyanshu1" && q === "shakedil2026";
+        const validShakeUUIDs = ["c310ca4f-b381-465b-a059-214ed51c66ce", "066a2503-017d-40a3-a74c-86978215ff7b"];
+        const isShakeUUID = validShakeUUIDs.includes(currentUser.id) && q === "shakedil2026";
 
         if (isTotyil || isVivek) {
           setIsDevMode(true);
           setIsShakeMode(false);
-        } else if (isShakeTotyil || isShakePriyanshu) {
+        } else if (isShakeTotyil || isShakePriyanshu || isShakeUUID) {
           setIsDevMode(true);
           setIsShakeMode(true);
         } else {
@@ -1139,7 +1141,7 @@ export default function App() {
               &copy; {new Date().getFullYear()} SnackBox Inc.
             </div>
             <div className="w-1 h-1 rounded-full bg-white/20" />
-            <div className="text-white/40">v1.3.01</div>
+            <div className="text-white/40">v1.3.02</div>
           </div>
         </div>
       </footer>
