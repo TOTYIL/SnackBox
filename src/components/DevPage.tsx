@@ -214,12 +214,20 @@ export const DevPage: React.FC<DevPageProps> = ({
             statusToUse = a > 15 * 60 * 1000 ? "unanswered" : "pending";
           }
 
-          const items = o.order_items.map((oi: any) => ({
-            id: oi.product_id,
-            name: oi.name,
-            price: Number(oi.price),
-            quantity: oi.quantity,
-          }));
+          const itemsMap: Record<string, any> = {};
+          o.order_items.forEach((oi: any) => {
+            if (itemsMap[oi.product_id]) {
+              itemsMap[oi.product_id].quantity += oi.quantity;
+            } else {
+              itemsMap[oi.product_id] = {
+                id: oi.product_id,
+                name: oi.name,
+                price: Number(oi.price),
+                quantity: oi.quantity,
+              };
+            }
+          });
+          const items = Object.values(itemsMap);
 
           const cartTotalItems = items.reduce((acc: number, item: any) => acc + item.quantity, 0);
           const subtotal = items.reduce((acc, item: any) => acc + item.price * item.quantity, 0);
@@ -227,7 +235,12 @@ export const DevPage: React.FC<DevPageProps> = ({
           const cravePointsDisabled = o.crave_points_disabled === true || (typeof o.room === "string" && o.room.includes("||C:NO"));
           const shakeSeen = typeof o.room === "string" && o.room.includes("||S:OK");
 
-          const calculatedTotal = Math.max(0, (o.total !== undefined && o.total !== null ? Number(o.total) : subtotal) - pointsUsed - prepaidDiscount);
+          let serviceCharge = 0;
+          if (typeof actualRoom === "string" && actualRoom.includes(" - ") && !actualRoom.startsWith("Gaumukh")) {
+            serviceCharge = 30;
+          }
+
+          const calculatedTotal = Math.max(0, (o.total !== undefined && o.total !== null ? Number(o.total) : subtotal) + serviceCharge - pointsUsed - prepaidDiscount);
 
           return {
             id: o.id,
@@ -239,6 +252,7 @@ export const DevPage: React.FC<DevPageProps> = ({
             paymentMethod,
             pointsUsed,
             prepaidDiscount,
+            serviceCharge,
             cravePointsDisabled,
             shakeSeen,
             date: o.date,
@@ -522,7 +536,7 @@ export const DevPage: React.FC<DevPageProps> = ({
 
     if (isShakeMode) {
       // In shake mode, orders are only visible after acceptance, and they should ring if not yet acknowledged
-      return (o.status === "accepted" || o.status === "completed") && !o.shakeSeen;
+      return o.status === "accepted" && !o.shakeSeen;
     }
     return o.status === "pending";
   }).length;
@@ -1088,12 +1102,18 @@ export const DevPage: React.FC<DevPageProps> = ({
                               </li>
                             ))}
                           </ul>
-                          {(order.pointsUsed || order.prepaidDiscount) ? (
+                          {(order.pointsUsed || order.prepaidDiscount || order.serviceCharge) ? (
                             <div className="mt-4 pt-3 border-t border-white/10 space-y-1">
                               <div className="flex justify-between text-sm text-white/50">
                                 <span>Subtotal</span>
                                 <span>₹{order.items.reduce((acc, item) => acc + item.price * item.quantity, 0).toFixed(2)}</span>
                               </div>
+                              {order.serviceCharge ? (
+                                <div className="flex justify-between text-sm text-white/50">
+                                  <span>Service Charge</span>
+                                  <span>+₹{order.serviceCharge.toFixed(2)}</span>
+                                </div>
+                              ) : null}
                               {order.pointsUsed ? (
                                 <div className="flex justify-between text-sm text-emerald-400">
                                   <span>Crave Candies Used</span>
@@ -1302,9 +1322,9 @@ export const DevPage: React.FC<DevPageProps> = ({
                             <div className="flex items-center gap-4">
                               <div className="text-right">
                                 <p className="text-sm font-bold text-emerald-400">
-                                  ₹{dateOrders.reduce((sum, o) => sum + o.total, 0).toFixed(2)}
+                                  ₹{dateOrders.reduce((sum, o) => sum + ((o.computedStatus === "completed" || o.status === "completed") ? o.total : 0), 0).toFixed(2)}
                                 </p>
-                                <p className="text-[10px] text-white/40">Total Value</p>
+                                <p className="text-[10px] text-white/40">Total Value (Completed)</p>
                               </div>
                               <div className="text-white/40">
                                 {isExpanded ? (
@@ -1495,12 +1515,18 @@ export const DevPage: React.FC<DevPageProps> = ({
                                               ))}
                                             </ul>
 
-                                            {(order.pointsUsed || order.prepaidDiscount) ? (
+                                            {(order.pointsUsed || order.prepaidDiscount || order.serviceCharge) ? (
                                               <div className="mt-4 pt-3 border-t border-white/10 space-y-1">
                                                 <div className="flex justify-between text-sm text-white/50">
                                                   <span>Subtotal</span>
                                                   <span>₹{order.items.reduce((acc, item) => acc + item.price * item.quantity, 0).toFixed(2)}</span>
                                                 </div>
+                                                {order.serviceCharge ? (
+                                                  <div className="flex justify-between text-sm text-white/50">
+                                                    <span>Service Charge</span>
+                                                    <span>+₹{order.serviceCharge.toFixed(2)}</span>
+                                                  </div>
+                                                ) : null}
                                                 {order.pointsUsed ? (
                                                   <div className="flex justify-between text-sm text-emerald-400">
                                                     <span>Crave Candies Used</span>

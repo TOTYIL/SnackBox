@@ -197,19 +197,32 @@ export default function App() {
             statusToUse = recent.status as Order["status"];
           }
 
-          const items = o.order_items.map((oi: any) => ({
-            id: oi.product_id,
-            name: oi.name,
-            price: Number(oi.price),
-            quantity: oi.quantity,
-          }));
+          const itemsMap: Record<string, any> = {};
+          o.order_items.forEach((oi: any) => {
+            if (itemsMap[oi.product_id]) {
+              itemsMap[oi.product_id].quantity += oi.quantity;
+            } else {
+              itemsMap[oi.product_id] = {
+                id: oi.product_id,
+                name: oi.name,
+                price: Number(oi.price),
+                quantity: oi.quantity,
+              };
+            }
+          });
+          const items = Object.values(itemsMap);
 
           const cartTotalItems = items.reduce((acc: number, item: any) => acc + item.quantity, 0);
           const subtotal = items.reduce((acc, item: any) => acc + item.price * item.quantity, 0);
           const prepaidDiscount = 0;
           const cravePointsDisabled = o.crave_points_disabled === true || (typeof o.room === "string" && o.room.includes("||C:NO"));
 
-          const calculatedTotal = Math.max(0, (o.total !== undefined && o.total !== null ? Number(o.total) : subtotal) - pointsUsed - prepaidDiscount);
+          let serviceCharge = 0;
+          if (typeof actualRoom === "string" && actualRoom.includes(" - ") && !actualRoom.startsWith("Gaumukh")) {
+            serviceCharge = 30;
+          }
+
+          const calculatedTotal = Math.max(0, (o.total !== undefined && o.total !== null ? Number(o.total) : subtotal) + serviceCharge - pointsUsed - prepaidDiscount);
 
           return {
             id: o.id,
@@ -220,6 +233,7 @@ export default function App() {
             paymentMethod,
             pointsUsed,
             prepaidDiscount,
+            serviceCharge,
             cravePointsDisabled,
             date: o.date,
             total: calculatedTotal,
@@ -404,12 +418,12 @@ export default function App() {
   useEffect(() => {
     if (currentUser) {
       const validShakeUUIDs = ["c310ca4f-b381-465b-a059-214ed51c66ce", "066a2503-017d-40a3-a74c-86978215ff7b"];
-      if (validShakeUUIDs.includes(currentUser.id) || currentUser.username.toLowerCase() === "priyanshu1") {
-        setIsDevMode(true);
-        setIsShakeMode(true);
-      } else if (currentUser.username.toLowerCase() === "vivek joshi") {
+      if (currentUser.username.toLowerCase() === "vivek joshi") {
         setIsDevMode(true);
         setIsShakeMode(false);
+      } else if (validShakeUUIDs.includes(currentUser.id) || currentUser.username.toLowerCase() === "priyanshu1") {
+        setIsDevMode(true);
+        setIsShakeMode(true);
       }
     }
   }, [currentUser]);
@@ -529,11 +543,23 @@ export default function App() {
   const handleUpdateOrderItems = async (orderId: string, newItems: any[], newTotal: number) => {
     if (!supabase) return;
 
-    // First delete existing items
+    // Check if items exist before delete
+    const { data: existingItems } = await supabase.from('order_items').select('id').eq('order_id', orderId);
+
+    // Try to delete existing items
     const { error: delError } = await supabase.from('order_items').delete().eq('order_id', orderId);
     if(delError) {
       console.error("error deleting old items", delError);
       return;
+    }
+
+    // Check if delete succeeded or was silently blocked by RLS
+    if (existingItems && existingItems.length > 0) {
+      const { data: remainingItems } = await supabase.from('order_items').select('id').eq('order_id', orderId);
+      if (remainingItems && remainingItems.length > 0) {
+        alert("Editing failed: Database security rules prevented deleting old items. Please run 'update_order_items_policy.sql' in your Supabase SQL editor.");
+        return;
+      }
     }
 
     if (newItems.length > 0) {
@@ -1155,7 +1181,7 @@ export default function App() {
               &copy; {new Date().getFullYear()} SnackBox Inc.
             </div>
             <div className="w-1 h-1 rounded-full bg-white/20" />
-            <div className="text-white/40">v1.3.03</div>
+            <div className="text-white/40">v1.3.05</div>
           </div>
         </div>
       </footer>

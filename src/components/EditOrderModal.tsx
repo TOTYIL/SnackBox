@@ -26,7 +26,8 @@ export const EditOrderModal: React.FC<EditOrderModalProps> = ({ order, products,
       const limit = prod ? prod.stock : 999;
       const nextQ = Math.max(0, Math.min(limit, next[idx].quantity + delta));
       if (nextQ === 0) {
-        return next.filter(i => i.id !== id);
+        next.splice(idx, 1);
+        return next;
       }
       next[idx] = { ...next[idx], quantity: nextQ };
       return next;

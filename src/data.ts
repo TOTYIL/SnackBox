@@ -31,6 +31,7 @@ export interface Order {
   paymentMethod?: 'cod' | 'prepaid';
   pointsUsed?: number;
   prepaidDiscount?: number;
+  serviceCharge?: number;
   cravePointsDisabled?: boolean;
   dbRoom?: string;
   shakeSeen?: boolean;

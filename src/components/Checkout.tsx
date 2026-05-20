@@ -55,6 +55,9 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
   const [phone, setPhone] = useState(() => localStorage.getItem("snackbox_phone") || "");
   const [hostel, setHostel] = useState(() => localStorage.getItem("snackbox_hostel") || "Gaumukh");
   const [room, setRoom] = useState(() => localStorage.getItem("snackbox_room") || "");
+  const [secretTaps, setSecretTaps] = useState(0);
+
+  const isPromoActive = secretTaps >= 10;
 
   const serviceCharge = hostel === "Gaumukh" ? 0 : 30;
 
@@ -86,7 +89,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
   const handleProceedToMethod = (e: React.FormEvent) => {
     e.preventDefault();
     if (name && phone && room && hostel) {
-      if (hostel !== "Gaumukh" && total < 150) {
+      if (hostel !== "Gaumukh" && total < 150 && !isPromoActive) {
         setShowMinOrderError(true);
         setTimeout(() => setShowMinOrderError(false), 4000);
         return;
@@ -283,6 +286,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
                     />
                   </div>
 
+
                   <div className="pt-4 border-t border-white/10 mt-6 relative">
                     <label
                       className={`flex items-start gap-3 p-4 mb-4 rounded-2xl border transition-colors group ${cravePoints > 0 ? "bg-white/5 border-white/10 cursor-pointer hover:bg-white/10" : "bg-black/20 border-white/5 opacity-80 cursor-not-allowed"}`}
@@ -346,11 +350,26 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
                           <span>- ₹{pointsToRedeem.toFixed(2)}</span>
                         </div>
                       )}
-                      <div className="flex justify-between items-center border-t border-white/10 pt-2 mt-1">
+                      <div className="flex justify-between items-center border-t border-white/10 pt-2 mt-1 relative">
                         <span className="text-white/70">Total Amount</span>
-                        <span className="text-2xl font-bold">
+                        <span 
+                          className="text-2xl font-bold cursor-pointer"
+                          onClick={() => setSecretTaps(prev => prev + 1)}
+                        >
                           ₹{finalTotal.toFixed(2)}
                         </span>
+                        <AnimatePresence>
+                          {isPromoActive && (
+                            <motion.div
+                              initial={{ opacity: 0, y: 10, scale: 0.8 }}
+                              animate={{ opacity: 1, y: 0, scale: 1 }}
+                              exit={{ opacity: 0, scale: 0.8 }}
+                              className="absolute -top-10 right-0 bg-green-500 text-black text-xs font-bold px-3 py-1.5 rounded-xl shadow-lg pointer-events-none"
+                            >
+                              No Minimum Order!
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
                       </div>
                     </div>
                   </div>

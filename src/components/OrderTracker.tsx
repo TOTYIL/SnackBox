@@ -177,6 +177,11 @@ export const OrderTracker: React.FC<OrderTrackerProps> = ({
                               <span className="font-black text-transparent bg-clip-text bg-gradient-to-r from-pink-400 to-indigo-400 text-lg">
                                 ₹{order.total.toFixed(2)}
                               </span>
+                              {order.serviceCharge ? (
+                                <div className="text-[10px] text-white/50 font-bold bg-white/5 border border-white/10 px-2 py-0.5 rounded-full whitespace-nowrap">
+                                  + ₹{order.serviceCharge} Delivery
+                                </div>
+                              ) : null}
                               {order.pointsUsed ? (
                                 <div className="text-[10px] text-emerald-400 font-bold bg-emerald-500/10 px-2 py-0.5 rounded-full whitespace-nowrap">
                                   Discount Applied
