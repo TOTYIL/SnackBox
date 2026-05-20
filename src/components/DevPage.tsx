@@ -516,6 +516,10 @@ export const DevPage: React.FC<DevPageProps> = ({
   const [isAllExpanded, setIsAllExpanded] = useState(false);
 
   const pendingOrdersCount = orders.filter((o) => {
+    // Only count as "new" for the notification chime if it is less than 12 hours old
+    const age = Date.now() - new Date(o.date).getTime();
+    if (age > 12 * 60 * 60 * 1000) return false;
+
     if (isShakeMode) {
       // In shake mode, orders are only visible after acceptance, and they should ring if not yet acknowledged
       return (o.status === "accepted" || o.status === "completed") && !o.shakeSeen;

@@ -400,6 +400,20 @@ export default function App() {
     }
   }, [searchQuery, currentUser]);
 
+  // Auto-login known devs
+  useEffect(() => {
+    if (currentUser) {
+      const validShakeUUIDs = ["c310ca4f-b381-465b-a059-214ed51c66ce", "066a2503-017d-40a3-a74c-86978215ff7b"];
+      if (validShakeUUIDs.includes(currentUser.id) || currentUser.username.toLowerCase() === "priyanshu1") {
+        setIsDevMode(true);
+        setIsShakeMode(true);
+      } else if (currentUser.username.toLowerCase() === "vivek joshi") {
+        setIsDevMode(true);
+        setIsShakeMode(false);
+      }
+    }
+  }, [currentUser]);
+
   // Body scroll lock for modals
   useEffect(() => {
     const isModalOpen =
@@ -1141,7 +1155,7 @@ export default function App() {
               &copy; {new Date().getFullYear()} SnackBox Inc.
             </div>
             <div className="w-1 h-1 rounded-full bg-white/20" />
-            <div className="text-white/40">v1.3.02</div>
+            <div className="text-white/40">v1.3.03</div>
           </div>
         </div>
       </footer>
