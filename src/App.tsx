@@ -35,7 +35,6 @@ export default function App() {
   const [productsList, setProductsList] = useState<Product[]>([]);
   const [upiId, setUpiId] = useState("nhempire1717-3@oksbi");
   const [isDevMode, setIsDevMode] = useState(false);
-  const [isShakeMode, setIsShakeMode] = useState(false);
   const [isCartOpen, setIsCartOpen] = useState(false);
   const [isCheckoutOpen, setIsCheckoutOpen] = useState(false);
 
@@ -101,17 +100,26 @@ export default function App() {
     if (dbProducts && dbProducts.length > 0) {
       const newProducts = dbProducts
         .filter((d) => Number(d.stock) >= 0)
-        .map((d) => ({
-          id: d.id,
-          name: d.name,
-          description: d.description,
-          price: Number(d.price),
-          category: d.category,
-          image: d.image,
-          inStock: d.in_stock,
-          stock: Number(d.stock),
-          created_at: d.created_at,
-        }));
+        .map((d) => {
+          let cat = d.category || "";
+          let isListed = true;
+          if (cat.startsWith("_UNLISTED_")) {
+            isListed = false;
+            cat = cat.replace("_UNLISTED_", "");
+          }
+          return {
+            id: d.id,
+            name: d.name,
+            description: d.description,
+            price: Number(d.price),
+            category: cat,
+            image: d.image,
+            inStock: d.in_stock,
+            stock: Number(d.stock),
+            created_at: d.created_at,
+            isListed,
+          };
+        });
       setProductsList((prev) => {
         if (JSON.stringify(prev) === JSON.stringify(newProducts)) return prev;
         return newProducts;
@@ -129,7 +137,7 @@ export default function App() {
           name: p.name,
           description: p.description,
           price: p.price,
-          category: p.category,
+          category: p.isListed === false ? `_UNLISTED_${p.category}` : p.category,
           image: p.image,
           in_stock: p.inStock,
           stock: p.stock,
@@ -389,22 +397,13 @@ export default function App() {
   // Intercept special search query
   useEffect(() => {
     const q = searchQuery.toLowerCase().trim();
-    if (q === "snackdev2403" || q === "snackdil2030" || q === "shakedil2026") {
+    if (q === "snackdev2403") {
       setSearchQuery("");
       if (currentUser) {
-        const isTotyil = currentUser.username.toLowerCase() === "totyil" && q === "snackdev2403";
-        const isVivek = currentUser.username.toLowerCase() === "vivek joshi" && q === "snackdil2030";
-        const isShakeTotyil = currentUser.username.toLowerCase() === "totyil" && q === "shakedil2026";
-        const isShakePriyanshu = currentUser.username.toLowerCase() === "priyanshu1" && q === "shakedil2026";
-        const validShakeUUIDs = ["c310ca4f-b381-465b-a059-214ed51c66ce", "066a2503-017d-40a3-a74c-86978215ff7b"];
-        const isShakeUUID = validShakeUUIDs.includes(currentUser.id) && q === "shakedil2026";
+        const isTotyil = currentUser.username.toLowerCase() === "totyil";
 
-        if (isTotyil || isVivek) {
+        if (isTotyil) {
           setIsDevMode(true);
-          setIsShakeMode(false);
-        } else if (isShakeTotyil || isShakePriyanshu || isShakeUUID) {
-          setIsDevMode(true);
-          setIsShakeMode(true);
         } else {
           alert("Unauthorized or incorrect access code for your account.");
         }
@@ -413,20 +412,6 @@ export default function App() {
       }
     }
   }, [searchQuery, currentUser]);
-
-  // Auto-login known devs
-  useEffect(() => {
-    if (currentUser) {
-      const validShakeUUIDs = ["c310ca4f-b381-465b-a059-214ed51c66ce", "066a2503-017d-40a3-a74c-86978215ff7b"];
-      if (currentUser.username.toLowerCase() === "vivek joshi") {
-        setIsDevMode(true);
-        setIsShakeMode(false);
-      } else if (validShakeUUIDs.includes(currentUser.id) || currentUser.username.toLowerCase() === "priyanshu1") {
-        setIsDevMode(true);
-        setIsShakeMode(true);
-      }
-    }
-  }, [currentUser]);
 
   // Body scroll lock for modals
   useEffect(() => {
@@ -460,13 +445,13 @@ export default function App() {
       "All",
       ...Array.from(
         new Set(
-          productsList.map((p) => {
-            const c = (p.category || "").trim();
-            return c
-              ? c.charAt(0).toUpperCase() + c.slice(1).toLowerCase()
-              : "";
-          }),
-        ),
+          productsList
+            .filter((p) => p.isListed !== false)
+            .map((p) => {
+              const c = (p.category || "").trim();
+              return c ? c.charAt(0).toUpperCase() + c.slice(1).toLowerCase() : "";
+            })
+        )
       ).filter((c) => typeof c === "string" && c && c.toLowerCase() !== "all"),
     ];
   }, [productsList]);
@@ -482,6 +467,7 @@ export default function App() {
 
   const filteredProducts = useMemo(() => {
     const list = productsList.filter((p) => {
+      if (p.isListed === false) return false;
       if (searchQuery.trim().length > 0) {
         return p.name.toLowerCase().includes(searchQuery.toLowerCase());
       }
@@ -1242,10 +1228,8 @@ export default function App() {
               }}
               onClose={() => {
                 setIsDevMode(false);
-                setIsShakeMode(false);
               }}
               currentUser={currentUser}
-              isShakeMode={isShakeMode}
               onUpdateOrderItems={handleUpdateOrderItems}
             />
           </React.Suspense>

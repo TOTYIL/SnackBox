@@ -43,7 +43,6 @@ interface DevPageProps {
   setSiteStatus: (s: "live" | "offline") => void;
   onClose: () => void;
   currentUser?: { id: string; username: string; } | null;
-  isShakeMode?: boolean;
   onUpdateOrderItems?: (orderId: string, newItems: any[], newTotal: number) => Promise<void>;
 }
 
@@ -56,7 +55,6 @@ export const DevPage: React.FC<DevPageProps> = ({
   setSiteStatus,
   onClose,
   currentUser,
-  isShakeMode,
   onUpdateOrderItems,
 }) => {
   const [orders, setOrders] = useState<Order[]>([]);
@@ -259,32 +257,6 @@ export const DevPage: React.FC<DevPageProps> = ({
             total: calculatedTotal,
             status: statusToUse,
             items,
-          };
-        })
-        .filter((o) => {
-          if (!isShakeMode) return true;
-          // In shake mode, only show orders after they are accepted
-          if (o.status !== "accepted" && o.status !== "completed") return false;
-
-          return o.items.some((i: any) => {
-            const prod = products.find(p => p.id === i.id);
-            return i.name.toLowerCase().includes("shake") || i.name.toLowerCase().includes("cold coffee") || (prod?.category || "").toLowerCase().includes("shake");
-          });
-        })
-        .map((o) => {
-          if (!isShakeMode) return o;
-          const shakeItems = o.items.filter((i: any) => {
-            const prod = products.find(p => p.id === i.id);
-            return i.name.toLowerCase().includes("shake") || i.name.toLowerCase().includes("cold coffee") || (prod?.category || "").toLowerCase().includes("shake");
-          });
-          const shakesTotal = shakeItems.reduce(
-            (acc: number, i: any) => acc + i.price * i.quantity,
-            0,
-          );
-          return {
-            ...o,
-            items: shakeItems,
-            total: shakesTotal,
           };
         });
 
@@ -534,10 +506,6 @@ export const DevPage: React.FC<DevPageProps> = ({
     const age = Date.now() - new Date(o.date).getTime();
     if (age > 12 * 60 * 60 * 1000) return false;
 
-    if (isShakeMode) {
-      // In shake mode, orders are only visible after acceptance, and they should ring if not yet acknowledged
-      return o.status === "accepted" && !o.shakeSeen;
-    }
     return o.status === "pending";
   }).length;
 
@@ -745,6 +713,33 @@ export const DevPage: React.FC<DevPageProps> = ({
     setProducts(updated);
   };
 
+  const handleToggleListed = async (id: string, currentListed: boolean) => {
+    const updated = localProducts.map((p) => {
+      if (p.id === id) {
+        return { ...p, isListed: !currentListed };
+      }
+      return p;
+    });
+    setLocalProducts(updated);
+    setProducts(updated);
+    
+    if (!supabase) return;
+    const p = updated.find((prod) => prod.id === id);
+    if (p) {
+      logAction("toggle_product_listed", { id, isListed: p.isListed });
+      await supabase.from("products").upsert({
+        id: p.id,
+        name: p.name,
+        description: p.description,
+        price: p.price,
+        category: p.isListed === false ? `_UNLISTED_${p.category}` : p.category,
+        image: p.image,
+        in_stock: p.inStock,
+        stock: p.stock,
+      });
+    }
+  };
+
   const handleSaveSingleProduct = async (id: string) => {
     setEditingItemId(null);
     setNewlyAddedIds(prev => { const updated = { ...prev }; delete updated[id]; return updated; });
@@ -757,7 +752,7 @@ export const DevPage: React.FC<DevPageProps> = ({
         name: p.name,
         description: p.description,
         price: p.price,
-        category: p.category,
+        category: p.isListed === false ? `_UNLISTED_${p.category}` : p.category,
         image: p.image,
         in_stock: p.inStock,
         stock: p.stock,
@@ -855,7 +850,7 @@ export const DevPage: React.FC<DevPageProps> = ({
         name: p.name,
         description: p.description,
         price: p.price,
-        category: p.category,
+        category: p.isListed === false ? `_UNLISTED_${p.category}` : p.category,
         image: p.image,
         in_stock: p.inStock,
         stock: p.stock,
@@ -919,7 +914,7 @@ export const DevPage: React.FC<DevPageProps> = ({
               <ArrowLeft size={20} />
             </button>
             <h1 className="text-2xl sm:text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-pink-400 to-indigo-400">
-              {isShakeMode ? "Shake Portal" : "Developer Hub"}
+              Developer Hub
             </h1>
           </div>
 
@@ -944,17 +939,15 @@ export const DevPage: React.FC<DevPageProps> = ({
               <PackageSearch size={18} className="shrink-0" />{" "}
               <span className="hidden sm:inline">Inventory</span>
             </button>
-            {!isShakeMode && (
-              <button
-                onClick={() => setActiveTab("payment")}
-                className={`flex flex-1 justify-center items-center gap-2 px-3 sm:px-5 py-3 rounded-t-xl transition-colors font-medium text-sm sm:text-base ${activeTab === "payment" ? "bg-white/10 text-white border-b-2 border-green-400" : "text-white/60 hover:text-white"}`}
-              >
-                <CreditCard size={18} className="shrink-0" />{" "}
-                <span className="hidden sm:inline">
-                  {(!currentUser || currentUser.username.toLowerCase() === "totyil") ? "Payment Config" : "Site Config"}
-                </span>
-              </button>
-            )}
+            <button
+              onClick={() => setActiveTab("payment")}
+              className={`flex flex-1 justify-center items-center gap-2 px-3 sm:px-5 py-3 rounded-t-xl transition-colors font-medium text-sm sm:text-base ${activeTab === "payment" ? "bg-white/10 text-white border-b-2 border-green-400" : "text-white/60 hover:text-white"}`}
+            >
+              <CreditCard size={18} className="shrink-0" />{" "}
+              <span className="hidden sm:inline">
+                {(!currentUser || currentUser.username.toLowerCase() === "totyil") ? "Payment Config" : "Site Config"}
+              </span>
+            </button>
             <button
               onClick={() => setActiveTab("analytics")}
               className={`flex flex-1 justify-center items-center gap-2 px-3 sm:px-5 py-3 rounded-t-xl transition-colors font-medium text-sm sm:text-base ${activeTab === "analytics" ? "bg-white/10 text-white border-b-2 border-orange-400" : "text-white/60 hover:text-white"}`}
@@ -962,7 +955,7 @@ export const DevPage: React.FC<DevPageProps> = ({
               <BarChart3 size={18} className="shrink-0" />{" "}
               <span className="hidden sm:inline">Analytics</span>
             </button>
-            {currentUser?.username.toLowerCase() === "totyil" && !isShakeMode && (
+            {currentUser?.username.toLowerCase() === "totyil" && (
               <button
                 onClick={() => setActiveTab("logs")}
                 className={`flex flex-1 justify-center items-center gap-2 px-3 sm:px-5 py-3 rounded-t-xl transition-colors font-medium text-sm sm:text-base ${activeTab === "logs" ? "bg-white/10 text-white border-b-2 border-red-400" : "text-white/60 hover:text-white"}`}
@@ -1142,7 +1135,7 @@ export const DevPage: React.FC<DevPageProps> = ({
                             </div>
                           )}
 
-                          {order.shakeSeen && !isShakeMode && (
+                          {order.shakeSeen && (
                             <div className="mt-4 flex items-center gap-2 text-indigo-300 bg-indigo-500/10 px-3 py-1.5 rounded-lg w-fit text-sm font-medium">
                               <Check size={16} /> Shake Dev Seen
                             </div>
@@ -1153,18 +1146,7 @@ export const DevPage: React.FC<DevPageProps> = ({
                         {!order.isOld &&
                           order.computedStatus !== "completed" && (
                             <div className="flex flex-wrap gap-3 mt-4 pt-4 border-t border-white/10">
-                              {isShakeMode ? (
-                                !order.shakeSeen && (
-                                  <button
-                                    onClick={() => handleShakeSeen(order.id, order.dbRoom)}
-                                    className="flex items-center justify-center gap-2 flex-1 bg-green-500/20 text-green-300 hover:bg-green-500/30 transition py-2.5 rounded-xl font-medium"
-                                  >
-                                    <Check size={16} /> OK
-                                  </button>
-                                )
-                              ) : (
-                                <>
-                                  {order.computedStatus === "pending" && (
+                              {order.computedStatus === "pending" && (
                                 <>
                                   <button
                                     onClick={() =>
@@ -1246,8 +1228,6 @@ export const DevPage: React.FC<DevPageProps> = ({
                                   <RotateCcw size={16} /> Revert to Pending
                                 </button>
                               )}
-                            </>
-                          )}
                             </div>
                           )}
 
@@ -1662,10 +1642,6 @@ export const DevPage: React.FC<DevPageProps> = ({
                     if (bIsNewEditing && !aIsNewEditing) return 1;
                     return (a.name || "").localeCompare(b.name || "");
                   })
-                  .filter(product => {
-                    if (!isShakeMode) return true;
-                    return (product.name || "").toLowerCase().includes("shake") || (product.category || "").toLowerCase().includes("shake");
-                  })
                   .map((product) => (
                   <div
                     key={product.id}
@@ -1695,12 +1671,24 @@ export const DevPage: React.FC<DevPageProps> = ({
                                 {product.stock}
                               </span>
                             </div>
-                            <button
-                              onClick={() => setEditingItemId(product.id)}
-                              className="p-2 hover:bg-white/10 rounded-lg transition-colors text-white/60 hover:text-white"
-                            >
-                              <Edit2 size={16} />
-                            </button>
+                            <div className="flex gap-2">
+                              <button
+                                onClick={() => handleToggleListed(product.id, product.isListed !== false)}
+                                className={`text-xs px-2 py-1 rounded-md transition-colors ${
+                                  product.isListed !== false
+                                    ? "bg-green-500/20 text-green-400 border border-green-500/30 font-semibold"
+                                    : "bg-red-500/20 text-red-400 border border-red-500/30 font-semibold"
+                                }`}
+                              >
+                                {product.isListed !== false ? "Listed" : "Unlisted"}
+                              </button>
+                              <button
+                                onClick={() => setEditingItemId(product.id)}
+                                className="p-2 hover:bg-white/10 rounded-lg transition-colors text-white/60 hover:text-white"
+                              >
+                                <Edit2 size={16} />
+                              </button>
+                            </div>
                           </div>
                         </div>
                       </div>
@@ -1985,17 +1973,10 @@ export const DevPage: React.FC<DevPageProps> = ({
                     const itemTotalCost = cost * item.quantity;
                     
                     const prod = localProducts.find((p) => p.id === item.id);
-                    const isShake = item.name.toLowerCase().includes("shake") || item.name.toLowerCase().includes("cold coffee") || (prod?.category || "").toLowerCase().includes("shake");
 
                     const orderSubtotal = o.items ? o.items.reduce((acc, i) => acc + (i.price * i.quantity), 0) : 0;
                     const itemRevenueShare = orderSubtotal > 0 ? (item.price * item.quantity) / orderSubtotal : 0; // Rough estimate of its contribution to finalTotal
                     const itemRevenue = finalTotal * itemRevenueShare;
-
-                    if (isShake && !isShakeMode) {
-                        shakeCostInOrder += itemTotalCost;
-                        shakeRevenueInOrder += itemRevenue;
-                        return;
-                    }
 
                     orderCost += itemTotalCost;
                     totalItemsSold += item.quantity;
@@ -2008,55 +1989,27 @@ export const DevPage: React.FC<DevPageProps> = ({
                     itemStats[item.id].profit += (itemRevenue - itemTotalCost);
                   });
 
-                  if (!isShakeMode) {
-                    totalRevenue += Math.max(0, finalTotal - shakeRevenueInOrder);
-                    const orderProfit = Math.max(0, (finalTotal - shakeRevenueInOrder) - orderCost);
-                    totalProfit += orderProfit;
+                  totalRevenue += finalTotal;
+                  const orderProfit = Math.max(0, finalTotal - orderCost);
+                  totalProfit += orderProfit;
 
-                    const orderIdentifier = getRegisteredUserId(o);
-                    if (!orderIdentifier) return;
-                    const cStat = customerStats[orderIdentifier];
-                    if (cStat.phone === "N/A" && o.phone) cStat.phone = o.phone;
-                    if (cStat.room === "N/A" && o.room) cStat.room = o.room;
-                    
-                    cStat.totalSpent += Math.max(0, finalTotal - shakeRevenueInOrder);
-                    cStat.ordersCount += 1;
-                    const orderDate = new Date(o.date);
-                    const hour = orderDate.getHours();
-                    cStat.hours[hour] = (cStat.hours[hour] || 0) + 1;
-                    cStat.profit += orderProfit;
+                  const orderIdentifier = getRegisteredUserId(o);
+                  if (!orderIdentifier) return;
+                  const cStat = customerStats[orderIdentifier];
+                  if (cStat.phone === "N/A" && o.phone) cStat.phone = o.phone;
+                  if (cStat.room === "N/A" && o.room) cStat.room = o.room;
+                  
+                  cStat.totalSpent += finalTotal;
+                  cStat.ordersCount += 1;
+                  const orderDate = new Date(o.date);
+                  const hour = orderDate.getHours();
+                  cStat.hours[hour] = (cStat.hours[hour] || 0) + 1;
+                  cStat.profit += orderProfit;
 
-                    o.items.forEach(item => {
-                      const prod = localProducts.find((p) => p.id === item.id);
-                      const isShake = item.name.toLowerCase().includes("shake") || item.name.toLowerCase().includes("cold coffee") || (prod?.category || "").toLowerCase().includes("shake");
-                      if (isShake) return;
-
-                      cStat.itemsCount += item.quantity;
-                      cStat.products[item.name] = (cStat.products[item.name] || 0) + item.quantity;
-                    });
-                  } else {
-                    totalRevenue += finalTotal;
-                    const orderProfit = Math.max(0, finalTotal - orderCost);
-                    totalProfit += orderProfit;
-
-                    const orderIdentifier = getRegisteredUserId(o);
-                    if (!orderIdentifier) return;
-                    const cStat = customerStats[orderIdentifier];
-                    if (cStat.phone === "N/A" && o.phone) cStat.phone = o.phone;
-                    if (cStat.room === "N/A" && o.room) cStat.room = o.room;
-
-                    cStat.totalSpent += finalTotal;
-                    cStat.ordersCount += 1;
-                    const orderDate = new Date(o.date);
-                    const hour = orderDate.getHours();
-                    cStat.hours[hour] = (cStat.hours[hour] || 0) + 1;
-                    cStat.profit += orderProfit;
-
-                    o.items.forEach(item => {
-                      cStat.itemsCount += item.quantity;
-                      cStat.products[item.name] = (cStat.products[item.name] || 0) + item.quantity;
-                    });
-                  }
+                  o.items.forEach(item => {
+                    cStat.itemsCount += item.quantity;
+                    cStat.products[item.name] = (cStat.products[item.name] || 0) + item.quantity;
+                  });
                 });
 
                 const allItemsData = Object.values(itemStats)
@@ -2114,11 +2067,6 @@ export const DevPage: React.FC<DevPageProps> = ({
                         >
                           <div className="text-white/50 text-xs sm:text-sm mb-1 uppercase tracking-wider">Low Stock Alerts</div>
                           <div className="text-xl sm:text-3xl font-bold text-red-400">{localProducts.filter(p => {
-                            if (isShakeMode) {
-                              if (!(p.name.toLowerCase().includes("shake") || p.name.toLowerCase().includes("cold coffee") || (p.category || "").toLowerCase().includes("shake"))) {
-                                return false;
-                              }
-                            }
                             return p.stock <= (lowStockThresholds[p.id] !== undefined ? lowStockThresholds[p.id] : 5);
                           }).length}</div>
                         </button>
@@ -2321,10 +2269,6 @@ export const DevPage: React.FC<DevPageProps> = ({
                         <h3 className="text-lg font-bold mb-4">Stock Levels</h3>
                         <div className="flex-1 overflow-y-auto pr-2 space-y-2">
                           {localProducts
-                            .filter(p => {
-                              if (!isShakeMode) return true;
-                              return p.name.toLowerCase().includes("shake") || p.name.toLowerCase().includes("cold coffee") || (p.category || "").toLowerCase().includes("shake");
-                            })
                             .sort((a,b) => {
                               const aThreshold = lowStockThresholds[a.id] !== undefined ? lowStockThresholds[a.id] : 5;
                               const bThreshold = lowStockThresholds[b.id] !== undefined ? lowStockThresholds[b.id] : 5;

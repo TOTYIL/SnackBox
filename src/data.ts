@@ -9,6 +9,7 @@ export interface Product {
   stock: number;
   costPrice?: number;
   created_at?: string;
+  isListed?: boolean;
 }
 
 export interface OrderItem {
