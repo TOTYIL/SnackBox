@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useRef } from "react";
-import { Product, Order } from "../data";
+import React, { useState, useEffect, useRef, useMemo } from "react";
+import { Product, Order, MainCategory } from "../data";
 import {
   Save,
   Plus,
@@ -37,6 +37,8 @@ import { EditOrderModal } from "./EditOrderModal";
 interface DevPageProps {
   products: Product[];
   setProducts: (products: Product[]) => void;
+  mainCategories: MainCategory[];
+  setMainCategories: (categories: MainCategory[]) => void;
   upiId: string;
   setUpiId: (url: string) => void;
   siteStatus: "live" | "offline";
@@ -49,6 +51,8 @@ interface DevPageProps {
 export const DevPage: React.FC<DevPageProps> = ({
   products,
   setProducts,
+  mainCategories,
+  setMainCategories,
   upiId,
   setUpiId,
   siteStatus,
@@ -66,6 +70,12 @@ export const DevPage: React.FC<DevPageProps> = ({
   const [activeTab, setActiveTab] = useState<
     "orders" | "inventory" | "payment" | "analytics" | "logs"
   >("orders");
+  const [creatingMainCatForProduct, setCreatingMainCatForProduct] = useState<string | null>(null);
+  const [newMainCatInput, setNewMainCatInput] = useState("");
+  const [renamingMainCatForProduct, setRenamingMainCatForProduct] = useState<{ productId: string; mcId: string } | null>(null);
+  const [renameMainCatInput, setRenameMainCatInput] = useState("");
+  const [draftMainCatByProduct, setDraftMainCatByProduct] = useState<Record<string, string>>({});
+  const [draftMainCatTouched, setDraftMainCatTouched] = useState<Record<string, boolean>>({});
   const [developerLogs, setDeveloperLogs] = useState<any[]>([]);
   const [analyticsView, setAnalyticsView] = useState<
     "overview" | "revenue" | "profit" | "items" | "users" | "low_stock"
@@ -741,34 +751,144 @@ export const DevPage: React.FC<DevPageProps> = ({
   };
 
   const handleSaveSingleProduct = async (id: string) => {
-    setEditingItemId(null);
-    setNewlyAddedIds(prev => { const updated = { ...prev }; delete updated[id]; return updated; });
-    if (!supabase) return;
-    const p = localProducts.find((prod) => prod.id === id);
-    if (p) {
-      logAction("save_product", { id, product: p });
-      await supabase.from("products").upsert({
-        id: p.id,
-        name: p.name,
-        description: p.description,
-        price: p.price,
-        category: p.isListed === false ? `_UNLISTED_${p.category}` : p.category,
-        image: p.image,
-        in_stock: p.inStock,
-        stock: p.stock,
-      });
+    const existingProd = localProducts.find((prod) => prod.id === id);
+    if (!existingProd) {
+      setEditingItemId(null);
+      return;
+    }
 
-      // Update cost prices
-      const updatedCostPrices = { ...costPrices };
-      await supabase.from("payment_config").upsert({
-        id: "cost_prices",
-        qr_code_url: JSON.stringify(updatedCostPrices),
-      });
-      await supabase.from("payment_config").upsert({
-        id: "low_stock_thresholds",
-        qr_code_url: JSON.stringify(lowStockThresholds),
+    let latestMainCats = [...mainCategories];
+    let targetMcId =
+      draftMainCatByProduct[id] !== undefined
+        ? draftMainCatByProduct[id]
+        : getMainCategoryForSub(existingProd.category)?.id || "";
+
+    // If user typed a new main category name without clicking the checkmark, create it on Done
+    if (creatingMainCatForProduct === id && newMainCatInput.trim()) {
+      const trimmedNewMc = newMainCatInput.trim();
+      const existingMc = latestMainCats.find(
+        (mc) => mc.name.trim().toLowerCase() === trimmedNewMc.toLowerCase(),
+      );
+      if (existingMc) {
+        targetMcId = existingMc.id;
+      } else {
+        const newMc: MainCategory = {
+          id: `mc_${Date.now()}`,
+          name: trimmedNewMc,
+          subCategories: [],
+        };
+        latestMainCats = [...latestMainCats, newMc];
+        targetMcId = newMc.id;
+      }
+    }
+
+    let finalSubCat = (existingProd.category || "").trim();
+    if ((!finalSubCat || finalSubCat.toLowerCase() === "all") && targetMcId) {
+      const chosenMc = latestMainCats.find((mc) => mc.id === targetMcId);
+      if (chosenMc) {
+        finalSubCat = chosenMc.name;
+      }
+    }
+
+    const updatedProduct: Product = {
+      ...existingProd,
+      category: finalSubCat,
+    };
+
+    // Update product state synchronously
+    const nextProducts = localProducts.map((prod) =>
+      prod.id === id ? updatedProduct : prod,
+    );
+    setLocalProducts(nextProducts);
+    setProducts(nextProducts);
+
+    // Update mainCategories synchronously so the item moves to its new section immediately
+    let updatedMainCats = latestMainCats;
+    const subKey = normalizeSubKey(finalSubCat);
+    if (subKey && subKey !== "all") {
+      updatedMainCats = latestMainCats.map((mc) => {
+        const filtered = (mc.subCategories || []).filter(
+          (s) => normalizeSubKey(s) !== subKey,
+        );
+        if (mc.id === targetMcId) {
+          return { ...mc, subCategories: [...filtered, finalSubCat] };
+        }
+        return { ...mc, subCategories: filtered };
       });
     }
+
+    const catsChanged =
+      JSON.stringify(updatedMainCats) !== JSON.stringify(mainCategories);
+    if (catsChanged) {
+      localStorage.setItem("snackbox_cat_updated_at", String(Date.now()));
+      setMainCategories(updatedMainCats);
+      localStorage.setItem(
+        "snackbox_main_categories",
+        JSON.stringify(updatedMainCats),
+      );
+      logAction("update_item_category", {
+        id,
+        mainCategoryId: targetMcId || null,
+        subCategory: finalSubCat,
+      });
+    }
+
+    // Exit edit mode immediately so UI updates instantly
+    setEditingItemId(null);
+    setCreatingMainCatForProduct(null);
+    setNewMainCatInput("");
+    setRenamingMainCatForProduct(null);
+    setRenameMainCatInput("");
+    setNewlyAddedIds((prev) => {
+      const updated = { ...prev };
+      delete updated[id];
+      return updated;
+    });
+    setDraftMainCatByProduct((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+    setDraftMainCatTouched((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+
+    if (!supabase) return;
+
+    logAction("save_product", { id, product: updatedProduct });
+    await supabase.from("products").upsert({
+      id: updatedProduct.id,
+      name: updatedProduct.name,
+      description: updatedProduct.description,
+      price: updatedProduct.price,
+      category:
+        updatedProduct.isListed === false
+          ? `_UNLISTED_${updatedProduct.category}`
+          : updatedProduct.category,
+      image: updatedProduct.image,
+      in_stock: updatedProduct.inStock,
+      stock: updatedProduct.stock,
+    });
+
+    if (catsChanged) {
+      await supabase.from("payment_config").upsert({
+        id: "category_hierarchy",
+        qr_code_url: JSON.stringify(updatedMainCats),
+      });
+    }
+
+    // Update cost prices
+    const updatedCostPrices = { ...costPrices };
+    await supabase.from("payment_config").upsert({
+      id: "cost_prices",
+      qr_code_url: JSON.stringify(updatedCostPrices),
+    });
+    await supabase.from("payment_config").upsert({
+      id: "low_stock_thresholds",
+      qr_code_url: JSON.stringify(lowStockThresholds),
+    });
   };
 
   const logAction = async (action: string, details: any) => {
@@ -799,12 +919,14 @@ export const DevPage: React.FC<DevPageProps> = ({
     const newId = `p${Date.now()}`;
     logAction("add_product", { id: newId });
     setNewlyAddedIds(prev => ({ ...prev, [newId]: true }));
+    setDraftMainCatByProduct(prev => ({ ...prev, [newId]: "" }));
+    setDraftMainCatTouched(prev => ({ ...prev, [newId]: false }));
     const newProd: Product = {
       id: newId,
       name: "New Snack",
       description: "Description",
       price: 0,
-      category: "All",
+      category: "",
       image:
         "https://images.unsplash.com/photo-1599598425947-33001bfce3df?auto=format&fit=crop&w=400&q=80",
       inStock: true,
@@ -879,6 +1001,165 @@ export const DevPage: React.FC<DevPageProps> = ({
       .from("payment_config")
       .update({ qr_code_url: localQr })
       .eq("id", "config");
+  };
+
+  const normalizeSubKey = (s: string) => (s || "").trim().toLowerCase();
+
+  const allKnownSubCategories = useMemo(() => {
+    const map = new Map<string, string>();
+    localProducts.forEach((p) => {
+      const raw = (p.category || "").trim();
+      const key = raw.toLowerCase();
+      if (key && key !== "all" && !map.has(key)) {
+        map.set(key, raw.charAt(0).toUpperCase() + raw.slice(1));
+      }
+    });
+    mainCategories.forEach((mc) => {
+      (mc.subCategories || []).forEach((sub) => {
+        const raw = (sub || "").trim();
+        const key = raw.toLowerCase();
+        if (key && key !== "all" && !map.has(key)) {
+          map.set(key, raw);
+        }
+      });
+    });
+    return Array.from(map.values()).sort((a, b) => a.localeCompare(b));
+  }, [localProducts, mainCategories]);
+
+  const getMainCategoryForSub = (subCat: string) => {
+    const key = normalizeSubKey(subCat);
+    if (!key) return undefined;
+    return mainCategories.find((mc) =>
+      (mc.subCategories || []).some((s) => normalizeSubKey(s) === key),
+    );
+  };
+
+  const groupedInventory = useMemo(() => {
+    const newEditing: Product[] = [];
+    const groupsMap = new Map<string, { id: string; name: string; items: Product[] }>();
+
+    mainCategories.forEach((mc) => {
+      groupsMap.set(mc.id, { id: mc.id, name: mc.name, items: [] });
+    });
+    const otherGroup: { id: string; name: string; items: Product[] } = {
+      id: "__other__",
+      name: "Other",
+      items: [],
+    };
+
+    localProducts.forEach((p) => {
+      if (p.id === editingItemId && newlyAddedIds[p.id]) {
+        newEditing.push(p);
+        return;
+      }
+      const mc = getMainCategoryForSub(p.category);
+      if (mc && groupsMap.has(mc.id)) {
+        groupsMap.get(mc.id)!.items.push(p);
+      } else {
+        otherGroup.items.push(p);
+      }
+    });
+
+    const sortItems = (items: Product[], subOrder?: string[]) => {
+      return [...items].sort((a, b) => {
+        const subA = normalizeSubKey(a.category);
+        const subB = normalizeSubKey(b.category);
+        if (subA !== subB) {
+          if (subOrder && subOrder.length > 0) {
+            const idxA = subOrder.findIndex((s) => normalizeSubKey(s) === subA);
+            const idxB = subOrder.findIndex((s) => normalizeSubKey(s) === subB);
+            if (idxA !== -1 && idxB !== -1) return idxA - idxB;
+            if (idxA !== -1) return -1;
+            if (idxB !== -1) return 1;
+          }
+          return subA.localeCompare(subB);
+        }
+        return (a.name || "").localeCompare(b.name || "");
+      });
+    };
+
+    const groups: { id: string; name: string; items: Product[] }[] = [];
+    mainCategories.forEach((mc) => {
+      const grp = groupsMap.get(mc.id);
+      if (grp && grp.items.length > 0) {
+        groups.push({
+          ...grp,
+          items: sortItems(grp.items, mc.subCategories),
+        });
+      }
+    });
+    if (otherGroup.items.length > 0) {
+      groups.push({
+        ...otherGroup,
+        items: sortItems(otherGroup.items),
+      });
+    }
+
+    return { newEditing, groups };
+  }, [localProducts, mainCategories, editingItemId, newlyAddedIds]);
+
+  const persistMainCategories = async (
+    updated: MainCategory[],
+    action: string,
+    details: any,
+  ) => {
+    localStorage.setItem("snackbox_cat_updated_at", String(Date.now()));
+    setMainCategories(updated);
+    localStorage.setItem("snackbox_main_categories", JSON.stringify(updated));
+    logAction(action, details);
+    if (supabase) {
+      await supabase.from("payment_config").upsert({
+        id: "category_hierarchy",
+        qr_code_url: JSON.stringify(updated),
+      });
+    }
+  };
+
+  const handleCreateMainCategoryForItem = async (
+    productId: string,
+    mainCatName: string,
+  ) => {
+    const trimmed = mainCatName.trim();
+    if (!trimmed) return;
+    const existing = mainCategories.find(
+      (mc) => mc.name.trim().toLowerCase() === trimmed.toLowerCase(),
+    );
+    if (existing) {
+      setDraftMainCatByProduct((prev) => ({ ...prev, [productId]: existing.id }));
+      setDraftMainCatTouched((prev) => ({ ...prev, [productId]: true }));
+      setCreatingMainCatForProduct(null);
+      setNewMainCatInput("");
+      return;
+    }
+
+    const newMc: MainCategory = {
+      id: `mc_${Date.now()}`,
+      name: trimmed,
+      subCategories: [],
+    };
+    const updated = [...mainCategories, newMc];
+    setDraftMainCatByProduct((prev) => ({ ...prev, [productId]: newMc.id }));
+    setDraftMainCatTouched((prev) => ({ ...prev, [productId]: true }));
+    setCreatingMainCatForProduct(null);
+    setNewMainCatInput("");
+    await persistMainCategories(updated, "add_main_category", {
+      id: newMc.id,
+      name: trimmed,
+    });
+  };
+
+  const handleRenameMainCategory = async (id: string, newName: string) => {
+    const trimmed = newName.trim();
+    if (!trimmed) return;
+    const updated = mainCategories.map((mc) =>
+      mc.id === id ? { ...mc, name: trimmed } : mc,
+    );
+    setRenamingMainCatForProduct(null);
+    setRenameMainCatInput("");
+    await persistMainCategories(updated, "rename_main_category", {
+      id,
+      name: trimmed,
+    });
   };
 
   return (
@@ -1633,16 +1914,8 @@ export const DevPage: React.FC<DevPageProps> = ({
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {[...localProducts]
-                  .sort((a, b) => {
-                    const aIsNewEditing = a.id === editingItemId && newlyAddedIds[a.id];
-                    const bIsNewEditing = b.id === editingItemId && newlyAddedIds[b.id];
-                    if (aIsNewEditing && !bIsNewEditing) return -1;
-                    if (bIsNewEditing && !aIsNewEditing) return 1;
-                    return (a.name || "").localeCompare(b.name || "");
-                  })
-                  .map((product) => (
+              {(() => {
+                const renderInventoryCard = (product: Product) => (
                   <div
                     key={product.id}
                     className={`glass-panel p-4 rounded-3xl border transition-all w-full flex flex-col justify-between ${editingItemId === product.id ? "border-indigo-400 bg-white/10" : "border-white/10"}`}
@@ -1683,7 +1956,18 @@ export const DevPage: React.FC<DevPageProps> = ({
                                 {product.isListed !== false ? "Listed" : "Unlisted"}
                               </button>
                               <button
-                                onClick={() => setEditingItemId(product.id)}
+                                onClick={() => {
+                                  const currentMc = getMainCategoryForSub(product.category);
+                                  setDraftMainCatByProduct((prev) => ({
+                                    ...prev,
+                                    [product.id]: currentMc?.id || "",
+                                  }));
+                                  setDraftMainCatTouched((prev) => ({
+                                    ...prev,
+                                    [product.id]: false,
+                                  }));
+                                  setEditingItemId(product.id);
+                                }}
                                 className="p-2 hover:bg-white/10 rounded-lg transition-colors text-white/60 hover:text-white"
                               >
                                 <Edit2 size={16} />
@@ -1809,22 +2093,219 @@ export const DevPage: React.FC<DevPageProps> = ({
                             />
                           </div>
                         </div>
-                        <div>
-                          <label className="text-[10px] uppercase tracking-wider text-white/50 ml-1">
-                            Category
-                          </label>
-                          <input
-                            type="text"
-                            value={product.category}
-                            onChange={(e) =>
-                              handleProductChange(
-                                product.id,
-                                "category",
-                                e.target.value,
-                              )
-                            }
-                            className="glass-input w-full p-2.5 rounded-xl text-sm"
-                          />
+                        <div className="space-y-3">
+                          <div>
+                            <label className="text-[10px] uppercase tracking-wider text-white/50 ml-1 mb-1 block">
+                              Main Category
+                            </label>
+                            {(() => {
+                              const activeMcId =
+                                draftMainCatByProduct[product.id] !== undefined
+                                  ? draftMainCatByProduct[product.id]
+                                  : getMainCategoryForSub(product.category)?.id || "";
+                              const isCreatingNew = creatingMainCatForProduct === product.id;
+                              const isRenaming =
+                                renamingMainCatForProduct?.productId === product.id &&
+                                renamingMainCatForProduct?.mcId === activeMcId;
+
+                              if (isCreatingNew) {
+                                return (
+                                  <div className="flex items-center gap-1.5">
+                                    <input
+                                      type="text"
+                                      autoFocus
+                                      value={newMainCatInput}
+                                      onChange={(e) => setNewMainCatInput(e.target.value)}
+                                      onKeyDown={(e) => {
+                                        if (e.key === "Enter") {
+                                          e.preventDefault();
+                                          handleCreateMainCategoryForItem(
+                                            product.id,
+                                            newMainCatInput,
+                                          );
+                                        } else if (e.key === "Escape") {
+                                          setCreatingMainCatForProduct(null);
+                                          setNewMainCatInput("");
+                                        }
+                                      }}
+                                      placeholder="New main category name..."
+                                      className="glass-input flex-1 p-2 rounded-xl text-sm"
+                                    />
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        handleCreateMainCategoryForItem(
+                                          product.id,
+                                          newMainCatInput,
+                                        )
+                                      }
+                                      className="p-2 rounded-xl bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30 transition"
+                                      title="Create"
+                                    >
+                                      <Check size={15} />
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setCreatingMainCatForProduct(null);
+                                        setNewMainCatInput("");
+                                      }}
+                                      className="p-2 rounded-xl bg-white/5 text-white/60 hover:bg-white/10 transition"
+                                      title="Cancel"
+                                    >
+                                      <X size={15} />
+                                    </button>
+                                  </div>
+                                );
+                              }
+
+                              if (isRenaming && activeMcId) {
+                                return (
+                                  <div className="flex items-center gap-1.5">
+                                    <input
+                                      type="text"
+                                      autoFocus
+                                      value={renameMainCatInput}
+                                      onChange={(e) => setRenameMainCatInput(e.target.value)}
+                                      onKeyDown={(e) => {
+                                        if (e.key === "Enter") {
+                                          e.preventDefault();
+                                          handleRenameMainCategory(activeMcId, renameMainCatInput);
+                                        } else if (e.key === "Escape") {
+                                          setRenamingMainCatForProduct(null);
+                                        }
+                                      }}
+                                      className="glass-input flex-1 p-2 rounded-xl text-sm"
+                                    />
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        handleRenameMainCategory(activeMcId, renameMainCatInput)
+                                      }
+                                      className="p-2 rounded-xl bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30 transition"
+                                      title="Save Name"
+                                    >
+                                      <Check size={15} />
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => setRenamingMainCatForProduct(null)}
+                                      className="p-2 rounded-xl bg-white/5 text-white/60 hover:bg-white/10 transition"
+                                      title="Cancel"
+                                    >
+                                      <X size={15} />
+                                    </button>
+                                  </div>
+                                );
+                              }
+
+                              return (
+                                <div className="flex items-center gap-1.5">
+                                  <div className="relative flex-1 min-w-0">
+                                    <select
+                                      value={activeMcId}
+                                      onChange={(e) => {
+                                        const val = e.target.value;
+                                        if (val === "__new__") {
+                                          setCreatingMainCatForProduct(product.id);
+                                          setNewMainCatInput("");
+                                          return;
+                                        }
+                                        setDraftMainCatByProduct((prev) => ({
+                                          ...prev,
+                                          [product.id]: val,
+                                        }));
+                                        setDraftMainCatTouched((prev) => ({
+                                          ...prev,
+                                          [product.id]: true,
+                                        }));
+                                      }}
+                                      className="glass-input w-full appearance-none pl-3 pr-9 py-2.5 rounded-xl text-sm cursor-pointer truncate"
+                                    >
+                                      <option value="" className="bg-zinc-900">
+                                        Other (Unassigned)
+                                      </option>
+                                      {mainCategories.map((mc) => (
+                                        <option key={mc.id} value={mc.id} className="bg-zinc-900">
+                                          {mc.name}
+                                        </option>
+                                      ))}
+                                      <option value="__new__" className="bg-zinc-900 text-pink-300">
+                                        + Create New Main Category...
+                                      </option>
+                                    </select>
+                                    <ChevronDown
+                                      size={16}
+                                      className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-white/60"
+                                    />
+                                  </div>
+                                  {activeMcId && (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        const current = mainCategories.find((m) => m.id === activeMcId);
+                                        setRenamingMainCatForProduct({
+                                          productId: product.id,
+                                          mcId: activeMcId,
+                                        });
+                                        setRenameMainCatInput(current?.name || "");
+                                      }}
+                                      className="p-2.5 rounded-xl bg-white/5 hover:bg-white/10 text-white/60 hover:text-white transition shrink-0"
+                                      title="Rename Main Category"
+                                    >
+                                      <Edit2 size={14} />
+                                    </button>
+                                  )}
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setCreatingMainCatForProduct(product.id);
+                                      setNewMainCatInput("");
+                                    }}
+                                    className="p-2.5 rounded-xl bg-white/5 hover:bg-white/10 text-white/60 hover:text-white transition shrink-0"
+                                    title="New Main Category"
+                                  >
+                                    <Plus size={14} />
+                                  </button>
+                                </div>
+                              );
+                            })()}
+                          </div>
+
+                          <div>
+                            <label className="text-[10px] uppercase tracking-wider text-white/50 ml-1 mb-1 block">
+                              Sub-Category
+                            </label>
+                            <input
+                              type="text"
+                              list={`subcat-list-${product.id}`}
+                              value={product.category}
+                              onChange={(e) => {
+                                const newSub = e.target.value;
+                                handleProductChange(
+                                  product.id,
+                                  "category",
+                                  newSub,
+                                );
+                                if (!draftMainCatTouched[product.id]) {
+                                  const matchedMc = getMainCategoryForSub(newSub);
+                                  if (matchedMc) {
+                                    setDraftMainCatByProduct((prev) => ({
+                                      ...prev,
+                                      [product.id]: matchedMc.id,
+                                    }));
+                                  }
+                                }
+                              }}
+                              placeholder="e.g. Chips & Crisps"
+                              className="glass-input w-full p-2.5 rounded-xl text-sm"
+                            />
+                            <datalist id={`subcat-list-${product.id}`}>
+                              {allKnownSubCategories.map((sub) => (
+                                <option key={sub} value={sub} />
+                              ))}
+                            </datalist>
+                          </div>
                         </div>
                         <div>
                           <label className="text-[10px] uppercase tracking-wider text-white/50 ml-1">
@@ -1862,8 +2343,34 @@ export const DevPage: React.FC<DevPageProps> = ({
                       </div>
                     )}
                   </div>
-                ))}
-              </div>
+                );
+
+                return (
+                  <div className="space-y-8">
+                    {groupedInventory.newEditing.length > 0 && (
+                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                        {groupedInventory.newEditing.map(renderInventoryCard)}
+                      </div>
+                    )}
+
+                    {groupedInventory.groups.map((group) => (
+                      <div key={group.id} className="space-y-3">
+                        <div className="flex items-center gap-3 pb-1 border-b border-white/10">
+                          <h3 className="text-sm font-semibold uppercase tracking-wider text-white/80">
+                            {group.name}
+                          </h3>
+                          <span className="text-xs text-white/40 bg-white/5 px-2 py-0.5 rounded-full">
+                            {group.items.length}
+                          </span>
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                          {group.items.map(renderInventoryCard)}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                );
+              })()}
             </motion.div>
           )}
 

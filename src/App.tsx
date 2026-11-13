@@ -1,7 +1,8 @@
 import React, { useState, useMemo, useEffect } from "react";
 import {
   products as initialProducts,
-  categories,
+  defaultMainCategories,
+  MainCategory,
   Product,
   Order,
 } from "./data";
@@ -28,7 +29,18 @@ interface CartItem extends Product {
 }
 
 export default function App() {
-  const [activeCategory, setActiveCategory] = useState("All");
+  const [activeMainCategory, setActiveMainCategory] = useState("All");
+  const [activeSubCategory, setActiveSubCategory] = useState<string | null>(null);
+  const [mainCategories, setMainCategories] = useState<MainCategory[]>(() => {
+    try {
+      const saved = localStorage.getItem("snackbox_main_categories");
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch (e) {}
+    return defaultMainCategories;
+  });
   const [searchQuery, setSearchQuery] = useState("");
 
   // App Global State
@@ -300,6 +312,30 @@ export default function App() {
         setSiteStatus("live");
       }
 
+      // Main Categories Hierarchy Config
+      const { data: catData } = await supabase
+        .from("payment_config")
+        .select("qr_code_url")
+        .eq("id", "category_hierarchy")
+        .single();
+      if (catData && catData.qr_code_url) {
+        try {
+          const parsed = JSON.parse(catData.qr_code_url);
+          if (Array.isArray(parsed)) {
+            setMainCategories(parsed);
+            localStorage.setItem("snackbox_main_categories", JSON.stringify(parsed));
+          }
+        } catch (e) {}
+      } else {
+        await supabase
+          .from("payment_config")
+          .upsert({
+            id: "category_hierarchy",
+            qr_code_url: JSON.stringify(defaultMainCategories),
+          });
+        setMainCategories(defaultMainCategories);
+      }
+
       // Orders
       fetchOrders();
     };
@@ -330,6 +366,26 @@ export default function App() {
           .eq("id", "config")
           .single();
         if (qData) setUpiId(qData.qr_code_url);
+
+        const lastLocalCatSave = Number(localStorage.getItem("snackbox_cat_updated_at") || "0");
+        if (Date.now() - lastLocalCatSave > 8000) {
+          const { data: catData } = await supabase
+            .from("payment_config")
+            .select("qr_code_url")
+            .eq("id", "category_hierarchy")
+            .single();
+          if (catData && catData.qr_code_url) {
+            try {
+              const parsed = JSON.parse(catData.qr_code_url);
+              if (Array.isArray(parsed)) {
+                setMainCategories((prev) =>
+                  JSON.stringify(prev) === JSON.stringify(parsed) ? prev : parsed
+                );
+                localStorage.setItem("snackbox_main_categories", JSON.stringify(parsed));
+              }
+            } catch (e) {}
+          }
+        }
       }
     }, 5000);
 
@@ -368,6 +424,14 @@ export default function App() {
                 );
               } else if (newData.id === "config") {
                 setUpiId(newData.qr_code_url);
+              } else if (newData.id === "category_hierarchy" && newData.qr_code_url) {
+                try {
+                  const parsed = JSON.parse(newData.qr_code_url);
+                  if (Array.isArray(parsed)) {
+                    setMainCategories(parsed);
+                    localStorage.setItem("snackbox_main_categories", JSON.stringify(parsed));
+                  }
+                } catch (e) {}
               }
             }
           },
@@ -440,21 +504,114 @@ export default function App() {
     activePage,
   ]);
 
-  const productCategories = useMemo(() => {
-    return [
-      "All",
-      ...Array.from(
-        new Set(
-          productsList
-            .filter((p) => p.isListed !== false)
-            .map((p) => {
-              const c = (p.category || "").trim();
-              return c ? c.charAt(0).toUpperCase() + c.slice(1).toLowerCase() : "";
-            })
-        )
-      ).filter((c) => typeof c === "string" && c && c.toLowerCase() !== "all"),
-    ];
+  const normalizeCat = (s: string) => (s || "").trim().toLowerCase();
+
+  const listedSubCategoriesMap = useMemo(() => {
+    const map = new Map<string, string>();
+    productsList
+      .filter((p) => p.isListed !== false)
+      .forEach((p) => {
+        const raw = (p.category || "").trim();
+        const key = raw.toLowerCase();
+        if (key && key !== "all" && !map.has(key)) {
+          map.set(key, raw.charAt(0).toUpperCase() + raw.slice(1));
+        }
+      });
+    return map;
   }, [productsList]);
+
+  const visibleMainCategories = useMemo(() => {
+    const assignedKeys = new Set<string>();
+    const result: MainCategory[] = [];
+
+    mainCategories.forEach((mc) => {
+      const validSubs: string[] = [];
+      const seenInMc = new Set<string>();
+      (mc.subCategories || []).forEach((sub) => {
+        const key = normalizeCat(sub);
+        if (key && !seenInMc.has(key)) {
+          seenInMc.add(key);
+          assignedKeys.add(key);
+          if (listedSubCategoriesMap.has(key)) {
+            validSubs.push(sub.trim());
+          }
+        }
+      });
+      if (validSubs.length > 0) {
+        result.push({
+          ...mc,
+          subCategories: validSubs,
+        });
+      }
+    });
+
+    const unassignedSubs: string[] = [];
+    listedSubCategoriesMap.forEach((label, key) => {
+      if (!assignedKeys.has(key)) {
+        unassignedSubs.push(label);
+      }
+    });
+
+    if (unassignedSubs.length > 0) {
+      result.push({
+        id: "__other__",
+        name: "Other",
+        subCategories: unassignedSubs,
+      });
+    }
+
+    return result;
+  }, [mainCategories, listedSubCategoriesMap]);
+
+  const visibleSubCategories = useMemo(() => {
+    const getRealSubs = (mc: MainCategory) =>
+      mc.subCategories.filter(
+        (sub) =>
+          listedSubCategoriesMap.has(normalizeCat(sub)) &&
+          (mc.id === "__other__" || normalizeCat(sub) !== normalizeCat(mc.name)),
+      );
+
+    if (activeMainCategory === "All") {
+      const seen = new Set<string>();
+      const allSubs: string[] = [];
+      visibleMainCategories.forEach((mc) => {
+        getRealSubs(mc).forEach((sub) => {
+          const key = normalizeCat(sub);
+          if (!seen.has(key)) {
+            seen.add(key);
+            allSubs.push(sub);
+          }
+        });
+      });
+      return allSubs;
+    }
+
+    const selectedMc = visibleMainCategories.find(
+      (mc) => mc.id === activeMainCategory,
+    );
+    return selectedMc ? getRealSubs(selectedMc) : [];
+  }, [activeMainCategory, visibleMainCategories, listedSubCategoriesMap]);
+
+  useEffect(() => {
+    if (
+      activeMainCategory !== "All" &&
+      !visibleMainCategories.some((mc) => mc.id === activeMainCategory)
+    ) {
+      setActiveMainCategory("All");
+      setActiveSubCategory(null);
+    }
+  }, [activeMainCategory, visibleMainCategories]);
+
+  useEffect(() => {
+    if (
+      activeSubCategory !== null &&
+      !visibleSubCategories.some(
+        (sub) => normalizeCat(sub) === normalizeCat(activeSubCategory),
+      )
+    ) {
+      setActiveSubCategory(null);
+    }
+  }, [activeSubCategory, visibleSubCategories]);
 
   // Check rage mode via user orders
   const isRageBlocked = useMemo(() => {
@@ -471,10 +628,20 @@ export default function App() {
       if (searchQuery.trim().length > 0) {
         return p.name.toLowerCase().includes(searchQuery.toLowerCase());
       }
-      if (activeCategory === "All") return true;
-      const prodCat = (p.category || "").trim().toLowerCase();
-      const activeLower = activeCategory.trim().toLowerCase();
-      return prodCat === activeLower;
+      const prodCat = normalizeCat(p.category);
+      if (activeSubCategory !== null) {
+        return prodCat === normalizeCat(activeSubCategory);
+      }
+      if (activeMainCategory !== "All") {
+        const selectedMc = visibleMainCategories.find(
+          (mc) => mc.id === activeMainCategory,
+        );
+        if (!selectedMc) return true;
+        return selectedMc.subCategories.some(
+          (sub) => normalizeCat(sub) === prodCat,
+        );
+      }
+      return true;
     });
 
     const getPriority = (p: Product) => {
@@ -510,7 +677,7 @@ export default function App() {
 
       return (b.created_at || "").localeCompare(a.created_at || "");
     });
-  }, [activeCategory, searchQuery, productsList, globalSales, currentUser]);
+  }, [activeMainCategory, activeSubCategory, visibleMainCategories, searchQuery, productsList, globalSales, currentUser]);
 
   const addToCart = React.useCallback((product: Product) => {
     setCartItems((prev) => {
@@ -1087,20 +1254,65 @@ export default function App() {
             </header>
 
             {/* Categories */}
-            <div className="flex overflow-x-auto pb-4 mb-8 -mx-4 px-4 sm:mx-0 sm:px-0 gap-3 no-scrollbar [&::-webkit-scrollbar]:hidden">
-              {productCategories.map((cat) => (
+            <div className="mb-8 space-y-3">
+              {/* Main Categories */}
+              <div className="flex overflow-x-auto pb-1 -mx-4 px-4 sm:mx-0 sm:px-0 gap-2.5 sm:gap-3 no-scrollbar [&::-webkit-scrollbar]:hidden">
                 <button
-                  key={cat}
-                  onClick={() => setActiveCategory(cat)}
-                  className={`whitespace-nowrap px-5 sm:px-6 py-2 sm:py-2.5 rounded-full border transition-all duration-300 text-sm sm:text-base ${
-                    activeCategory === cat
-                      ? "bg-white/20 text-white border-white font-medium"
-                      : "glass-panel border-white/20 hover:bg-white/10 font-medium text-white/80"
+                  onClick={() => {
+                    setActiveMainCategory("All");
+                    setActiveSubCategory(null);
+                  }}
+                  className={`whitespace-nowrap px-5 sm:px-6 py-2 sm:py-2.5 rounded-full border transition-all duration-300 text-sm sm:text-base font-semibold ${
+                    activeMainCategory === "All"
+                      ? "bg-white text-black border-white shadow-[0_0_20px_rgba(255,255,255,0.2)]"
+                      : "glass-panel border-white/20 hover:bg-white/10 text-white/80"
                   }`}
                 >
-                  {cat}
+                  All
                 </button>
-              ))}
+                {visibleMainCategories.map((mc) => (
+                  <button
+                    key={mc.id}
+                    onClick={() => {
+                      setActiveMainCategory(mc.id);
+                      setActiveSubCategory(null);
+                    }}
+                    className={`whitespace-nowrap px-5 sm:px-6 py-2 sm:py-2.5 rounded-full border transition-all duration-300 text-sm sm:text-base font-semibold ${
+                      activeMainCategory === mc.id
+                        ? "bg-white text-black border-white shadow-[0_0_20px_rgba(255,255,255,0.2)]"
+                        : "glass-panel border-white/20 hover:bg-white/10 text-white/80"
+                    }`}
+                  >
+                    {mc.name}
+                  </button>
+                ))}
+              </div>
+
+              {/* Sub-Categories lying under Main Category */}
+              {visibleSubCategories.length > 0 && (
+                <div className="flex items-center overflow-x-auto pb-2 -mx-4 px-4 sm:mx-0 sm:px-0 gap-2 no-scrollbar [&::-webkit-scrollbar]:hidden sm:pl-3 sm:border-l-2 sm:border-pink-400/30">
+                  {visibleSubCategories.map((sub) => {
+                    const isSelected =
+                      activeSubCategory !== null &&
+                      normalizeCat(activeSubCategory) === normalizeCat(sub);
+                    return (
+                      <button
+                        key={sub}
+                        onClick={() =>
+                          setActiveSubCategory(isSelected ? null : sub)
+                        }
+                        className={`whitespace-nowrap px-4 py-1.5 rounded-full border transition-all duration-300 text-xs sm:text-sm ${
+                          isSelected
+                            ? "bg-white/20 text-white border-white font-medium"
+                            : "glass-panel border-white/15 hover:bg-white/10 font-medium text-white/70"
+                        }`}
+                      >
+                        {sub}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
             </div>
 
             {/* Products Grid - Increased Density (4+ columns on larger screens) */}
@@ -1167,7 +1379,7 @@ export default function App() {
               &copy; {new Date().getFullYear()} SnackBox Inc.
             </div>
             <div className="w-1 h-1 rounded-full bg-white/20" />
-            <div className="text-white/40">v1.3.05</div>
+            <div className="text-white/40">v1.3.06</div>
           </div>
         </div>
       </footer>
@@ -1214,6 +1426,8 @@ export default function App() {
             <DevPage
               products={productsList}
               setProducts={setProductsList}
+              mainCategories={mainCategories}
+              setMainCategories={setMainCategories}
               upiId={upiId}
               setUpiId={setUpiId}
               siteStatus={siteStatus === "loading" ? "live" : siteStatus}

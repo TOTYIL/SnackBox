@@ -5,11 +5,11 @@ import {
   CheckCircle,
   ArrowRight,
   Banknote,
-  QrCode,
   Smartphone,
   Award,
+  ExternalLink,
+  AlertCircle,
 } from "lucide-react";
-import QRCode from "react-qr-code";
 import confetti from "canvas-confetti";
 
 interface CheckoutModalProps {
@@ -43,9 +43,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
 }) => {
   const [step, setStep] = useState<
     | "details"
-    | "method"
     | "payment_online_choice"
-    | "payment_qr"
     | "payment_app"
     | "success"
   >("details");
@@ -67,7 +65,10 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
   const finalTotal = Math.max(0, total + serviceCharge - pointsToRedeem);
   const prepaidTotal = finalTotal;
 
-  const upiLink = `upi://pay?pa=${encodeURIComponent(upiId.trim())}&pn=${encodeURIComponent("SnackBox")}&tn=${encodeURIComponent(`Order Code: ${paymentCode}`)}&am=${prepaidTotal.toFixed(2)}&cu=INR`;
+  const cleanUpiId = upiId.trim();
+  const formattedAmount = prepaidTotal.toFixed(2);
+  const upiParams = `pa=${encodeURIComponent(cleanUpiId)}&pn=${encodeURIComponent("SnackBox")}&tr=${encodeURIComponent(`SB${paymentCode}`)}&tn=${encodeURIComponent(`SnackBox Order ${paymentCode}`)}&am=${formattedAmount}&cu=INR`;
+  const upiLink = `upi://pay?${upiParams}`;
 
   const [showMinOrderError, setShowMinOrderError] = useState(false);
 
@@ -104,7 +105,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
         // Fully paid with points!
         handleFinish("prepaid");
       } else {
-        setStep("method");
+        setStep("payment_online_choice");
       }
     }
   };
@@ -408,9 +409,9 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
               </motion.div>
             )}
 
-            {step === "method" && (
+            {step === "payment_online_choice" && (
               <motion.div
-                key="method"
+                key="payment_online_choice"
                 initial={{ opacity: 0, x: -20 }}
                 animate={{ opacity: 1, x: 0 }}
                 exit={{ opacity: 0, x: 20 }}
@@ -421,167 +422,83 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
                 >
                   ← Back to Details
                 </button>
-                <h2 className="text-2xl font-bold mb-2">Payment Option</h2>
-                <p className="text-white/60 mb-6 text-sm">
-                  How would you like to pay?
+                <h2 className="text-2xl font-bold mb-1">Online Payment</h2>
+                <p className="text-white/60 mb-4 text-sm">
+                  Choose how you want to pay.
                 </p>
 
-                <div className="grid grid-cols-2 gap-3 sm:gap-4">
-                  <button
-                    onClick={() => setStep("payment_online_choice")}
-                    className="w-full h-full min-h-[160px] sm:min-h-[180px] bg-white/10 hover:bg-white/20 border border-white/10 rounded-2xl p-4 sm:p-6 flex flex-col items-center justify-center gap-2 sm:gap-3 transition-colors group"
-                  >
-                    <div className="flex flex-col items-center justify-center flex-1">
-                      <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-full bg-indigo-500/20 text-indigo-400 flex items-center justify-center group-hover:scale-110 transition-transform mb-2 sm:mb-3">
-                        <QrCode size={20} className="sm:hidden" />
-                        <QrCode size={24} className="hidden sm:block" />
-                      </div>
-                      <div className="text-center">
-                        <h3 className="font-bold text-sm sm:text-lg mb-1">Pay Now</h3>
-                        <p className="text-xs sm:text-sm text-white/50 leading-tight">
-                          Pay via UPI instantly
-                        </p>
-                      </div>
-                    </div>
-                    {/* Fixed height container for equal button heights */}
-                    <div className="h-6 flex items-center justify-center">
-                    </div>
-                  </button>
-
-                  <button
-                    onClick={() => handleFinish("cod")}
-                    className="w-full h-full min-h-[160px] sm:min-h-[180px] bg-white/10 hover:bg-white/20 border border-white/10 rounded-2xl p-4 sm:p-6 flex flex-col items-center justify-center gap-2 sm:gap-3 transition-colors group"
-                  >
-                    <div className="flex flex-col items-center justify-center flex-1">
-                      <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-full bg-green-500/20 text-green-400 flex items-center justify-center group-hover:scale-110 transition-transform mb-2 sm:mb-3">
-                        <Banknote size={20} className="sm:hidden" />
-                        <Banknote size={24} className="hidden sm:block" />
-                      </div>
-                      <div className="text-center">
-                        <h3 className="font-bold text-sm sm:text-lg mb-1">
-                          COD
-                        </h3>
-                        <p className="text-xs sm:text-sm text-white/50 leading-tight">
-                          Pay when your snacks arrive
-                        </p>
-                      </div>
-                    </div>
-                    <div className="h-6"></div>
-                  </button>
-                </div>
-              </motion.div>
-            )}
-
-            {step === "payment_online_choice" && (
-              <motion.div
-                key="payment_online_choice"
-                initial={{ opacity: 0, x: -20 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: 20 }}
-              >
-                <button
-                  onClick={() => setStep("method")}
-                  className="text-white/50 text-sm hover:text-white mb-4 block"
-                >
-                  ← Back to Options
-                </button>
-                <h2 className="text-2xl font-bold mb-2">Online Payment</h2>
-                <p className="text-white/60 mb-6 text-sm">
-                  Choose how you want to pay online.
-                </p>
-
-                <div className="space-y-4">
-                  <a
-                    href={upiLink}
-                    target="_top"
-                    onClick={() => setStep("payment_app")}
-                    className="w-full bg-white/10 hover:bg-white/20 border border-white/10 rounded-2xl p-4 flex items-center justify-start gap-4 transition-colors group cursor-pointer"
-                  >
-                    <div className="w-12 h-12 rounded-full bg-pink-500/20 text-pink-400 flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform">
-                      <Smartphone size={24} />
-                    </div>
-                    <div className="text-left flex-1">
-                      <h3 className="font-bold text-lg mb-1">
-                        Pay via UPI App
-                      </h3>
-                      <p className="text-sm text-white/50">
-                        Google Pay, PhonePe, Paytm, etc.
-                      </p>
-                    </div>
-                  </a>
-
-                  <button
-                    onClick={() => setStep("payment_qr")}
-                    className="w-full bg-white/10 hover:bg-white/20 border border-white/10 rounded-2xl p-4 flex items-center justify-start gap-4 transition-colors group"
-                  >
-                    <div className="w-12 h-12 rounded-full bg-blue-500/20 text-blue-400 flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform">
-                      <QrCode size={24} />
-                    </div>
-                    <div className="text-left flex-1">
-                      <h3 className="font-bold text-lg mb-1">Scan QR Code</h3>
-                      <p className="text-sm text-white/50">
-                        Display QR code to scan from another device
-                      </p>
-                    </div>
-                  </button>
-                </div>
-              </motion.div>
-            )}
-
-            {step === "payment_qr" && (
-              <motion.div
-                key="payment_qr"
-                initial={{ opacity: 0, x: -20 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: 20 }}
-                className="text-center"
-              >
-                <button
-                  onClick={() => setStep("payment_online_choice")}
-                  className="text-white/50 text-sm hover:text-white mb-2 ml-auto"
-                >
-                  ← Back
-                </button>
-                <h2 className="text-2xl font-bold mb-2">Complete Payment</h2>
-                <p className="text-white/60 mb-6 text-sm px-4">
-                  Scan the QR code below with any UPI app to pay{" "}
-                  <b className="text-white">₹{prepaidTotal.toFixed(2)}</b>
-                </p>
-
-                <div className="bg-white p-4 rounded-3xl mx-auto w-48 h-48 mb-6 relative overflow-hidden flex items-center justify-center">
-                  {upiId ? (
-                    <QRCode
-                      size={256}
-                      style={{
-                        height: "auto",
-                        maxWidth: "100%",
-                        width: "100%",
-                      }}
-                      value={upiLink}
-                      viewBox={`0 0 256 256`}
-                    />
-                  ) : (
-                    <div className="text-black/50 text-sm text-center">
-                      UPI ID not set in Dev Page
+                {/* Total & Cost Breakdown */}
+                <div className="bg-white/5 border border-white/10 rounded-2xl p-4 mb-5 flex flex-col gap-2">
+                  <div className="flex justify-between items-center text-sm text-white/60">
+                    <span>Cart Total</span>
+                    <span>₹{total.toFixed(2)}</span>
+                  </div>
+                  {serviceCharge > 0 && (
+                    <div className="flex justify-between items-center text-sm text-white/60">
+                      <span>Service Charge ({hostel})</span>
+                      <span>+ ₹{serviceCharge.toFixed(2)}</span>
                     </div>
                   )}
-                </div>
-
-                <div className="glass-panel p-3 rounded-2xl mb-6 border border-pink-500/30 bg-pink-500/10">
-                  <p className="text-xs text-white/80 mb-1">
-                    Order Code (auto-added to remark if supported):
-                  </p>
-                  <div className="text-xl font-mono font-bold tracking-[0.2em] text-pink-300">
-                    {paymentCode}
+                  {usePoints && pointsToRedeem > 0 && (
+                    <div className="flex justify-between items-center text-sm text-pink-400">
+                      <span>Crave Candy point discount</span>
+                      <span>- ₹{pointsToRedeem.toFixed(2)}</span>
+                    </div>
+                  )}
+                  <div className="flex justify-between items-center border-t border-white/10 pt-2 mt-1">
+                    <span className="text-white/80 font-medium">Total Amount</span>
+                    <span className="text-2xl font-bold text-white">
+                      ₹{formattedAmount}
+                    </span>
                   </div>
                 </div>
 
-                <button
-                  onClick={() => handleFinish("prepaid")}
-                  className="w-full bg-gradient-to-r from-pink-500 to-indigo-500 text-white font-semibold rounded-full p-4 flex items-center justify-center gap-2 hover:opacity-90 transition shadow-[0_0_20px_rgba(236,72,153,0.3)]"
-                >
-                  <CheckCircle size={18} /> I have paid
-                </button>
+                {!cleanUpiId && (
+                  <div className="bg-red-500/10 border border-red-500/30 rounded-2xl p-4 mb-3 flex items-start gap-3 text-left">
+                    <AlertCircle size={20} className="text-red-400 shrink-0 mt-0.5" />
+                    <div className="text-sm text-red-200">
+                      UPI ID is not configured in Payment Config. Please set a UPI ID in the Dev Page or pay with COD below.
+                    </div>
+                  </div>
+                )}
+
+                <div className="grid grid-cols-1 auto-rows-fr gap-3">
+                  {cleanUpiId && (
+                    <a
+                      href={upiLink}
+                      target="_top"
+                      onClick={() => setStep("payment_app")}
+                      className="w-full h-full min-h-[88px] bg-white/10 hover:bg-white/20 border border-white/10 rounded-2xl p-4 flex items-center justify-start gap-4 transition-colors group cursor-pointer"
+                    >
+                      <div className="w-12 h-12 rounded-full bg-pink-500/20 text-pink-400 flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform">
+                        <Smartphone size={24} />
+                      </div>
+                      <div className="text-left flex-1 min-w-0">
+                        <h3 className="font-bold text-lg mb-0.5">
+                          Pay with UPI App
+                        </h3>
+                        <p className="text-sm text-white/50 truncate">
+                          Pay ₹{formattedAmount} via UPI app
+                        </p>
+                      </div>
+                    </a>
+                  )}
+
+                  <button
+                    onClick={() => handleFinish("cod")}
+                    className="w-full h-full min-h-[88px] bg-white/10 hover:bg-white/20 border border-white/10 rounded-2xl p-4 flex items-center justify-start gap-4 transition-colors group"
+                  >
+                    <div className="w-12 h-12 rounded-full bg-green-500/20 text-green-400 flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform">
+                      <Banknote size={24} />
+                    </div>
+                    <div className="text-left flex-1 min-w-0">
+                      <h3 className="font-bold text-lg mb-0.5">COD</h3>
+                      <p className="text-sm text-white/50 truncate">
+                        Pay when your snacks arrive
+                      </p>
+                    </div>
+                  </button>
+                </div>
               </motion.div>
             )}
 
@@ -595,33 +512,41 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
               >
                 <button
                   onClick={() => setStep("payment_online_choice")}
-                  className="text-white/50 text-sm hover:text-white mb-2 ml-auto"
+                  className="text-white/50 text-sm hover:text-white mb-3 block"
                 >
                   ← Back
                 </button>
-                <h2 className="text-2xl font-bold mb-2">Complete Payment</h2>
-                <p className="text-white/60 mb-6 text-sm px-4">
-                  Please complete the payment of{" "}
-                  <b className="text-white">₹{prepaidTotal.toFixed(2)}</b> in
-                  your UPI app.
+                <h2 className="text-2xl font-bold mb-1">
+                  Complete UPI Payment
+                </h2>
+                <p className="text-white/60 mb-5 text-sm px-2">
+                  Complete the payment of{" "}
+                  <b className="text-white">₹{formattedAmount}</b> in your UPI
+                  app.
                 </p>
 
-                <div className="bg-white/5 border border-white/10 p-6 rounded-3xl mx-auto mb-6 flex items-center justify-center flex-col gap-4">
-                  <div className="w-16 h-16 rounded-full bg-pink-500/20 text-pink-400 flex items-center justify-center animate-pulse">
-                    <Smartphone size={32} />
+                <div className="bg-white/5 border border-white/10 p-5 rounded-3xl mx-auto mb-5 flex items-center justify-center flex-col gap-3">
+                  <div className="w-14 h-14 rounded-full bg-pink-500/20 text-pink-400 flex items-center justify-center animate-pulse">
+                    <Smartphone size={28} />
                   </div>
-                  <p className="text-white/80 font-medium">
-                    Waiting for you to complete the payment...
+                  <div className="text-2xl font-bold text-white">
+                    ₹{formattedAmount}
+                  </div>
+                  <p className="text-xs text-white/60">
+                    Order Code:{" "}
+                    <span className="font-mono font-bold text-white">
+                      {paymentCode}
+                    </span>
                   </p>
                 </div>
 
-                <div className="mb-6 mt-2">
+                <div className="flex flex-col gap-2.5 mb-5">
                   <a
                     href={upiLink}
                     target="_top"
-                    className="text-xs text-white/40 hover:text-white/60 underline transition-colors"
+                    className="w-full bg-white/10 hover:bg-white/20 border border-white/15 text-white font-medium rounded-full py-3 px-4 flex items-center justify-center gap-2 text-sm transition"
                   >
-                    Try opening payment app manually
+                    <ExternalLink size={16} /> Open UPI App Again
                   </a>
                 </div>
 

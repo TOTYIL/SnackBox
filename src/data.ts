@@ -38,6 +38,25 @@ export interface Order {
   shakeSeen?: boolean;
 }
 
+export interface MainCategory {
+  id: string;
+  name: string;
+  subCategories: string[];
+}
+
+export const defaultMainCategories: MainCategory[] = [
+  {
+    id: "mc_snacks",
+    name: "Snacks & Sweets",
+    subCategories: ["Chips & Crisps", "Chocolates", "Healthy"],
+  },
+  {
+    id: "mc_drinks_meals",
+    name: "Drinks & Instant",
+    subCategories: ["Drinks", "Instant Noodles"],
+  },
+];
+
 export const categories = [
   "All",
   "Chips & Crisps",
