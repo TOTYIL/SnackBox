@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import {
   X,
@@ -7,10 +7,11 @@ import {
   Banknote,
   Smartphone,
   Award,
-  ExternalLink,
   AlertCircle,
 } from "lucide-react";
 import confetti from "canvas-confetti";
+import { Order } from "../data";
+import { supabase } from "../lib/supabase";
 
 interface CheckoutModalProps {
   isOpen: boolean;
@@ -20,6 +21,7 @@ interface CheckoutModalProps {
   cartTotalItems: number;
   upiId: string;
   cravePoints: number;
+  orders?: Order[];
   onComplete: (data: {
     name: string;
     phone: string;
@@ -39,6 +41,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
   cartTotalItems,
   upiId,
   cravePoints,
+  orders = [],
   onComplete,
 }) => {
   const [step, setStep] = useState<
@@ -48,35 +51,46 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
     | "success"
   >("details");
   const [paymentCode, setPaymentCode] = useState("");
+  const [lockedAmount, setLockedAmount] = useState<string | null>(null);
+  const [secondsLeft, setSecondsLeft] = useState(5);
+  const [countdownStarted, setCountdownStarted] = useState(false);
+  const [successHeading, setSuccessHeading] = useState("Order Placed!");
+  const hasSubmittedRef = useRef(false);
+  const verificationHandledRef = useRef(false);
+  const leftAppRef = useRef(false);
+  const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [name, setName] = useState(() => localStorage.getItem("snackbox_name") || "");
   const [phone, setPhone] = useState(() => localStorage.getItem("snackbox_phone") || "");
-  const [hostel, setHostel] = useState(() => localStorage.getItem("snackbox_hostel") || "Gaumukh");
-  const [room, setRoom] = useState(() => localStorage.getItem("snackbox_room") || "");
-  const [secretTaps, setSecretTaps] = useState(0);
 
-  const isPromoActive = secretTaps >= 10;
-
-  const serviceCharge = hostel === "Gaumukh" ? 0 : 30;
+  const serviceCharge = 0;
 
   const [usePoints, setUsePoints] = useState(false);
   const pointsToRedeem =
     usePoints && cravePoints > 0 ? cravePoints : 0;
-  const finalTotal = Math.max(0, total + serviceCharge - pointsToRedeem);
+  const finalTotal = Math.max(0, total - pointsToRedeem);
   const prepaidTotal = finalTotal;
 
   const cleanUpiId = upiId.trim();
-  const formattedAmount = prepaidTotal.toFixed(2);
+  const formattedAmount = lockedAmount ?? prepaidTotal.toFixed(2);
   const upiParams = `pa=${encodeURIComponent(cleanUpiId)}&pn=${encodeURIComponent("SnackBox")}&tr=${encodeURIComponent(`SB${paymentCode}`)}&tn=${encodeURIComponent(`SnackBox Order ${paymentCode}`)}&am=${formattedAmount}&cu=INR`;
   const upiLink = `upi://pay?${upiParams}`;
 
-  const [showMinOrderError, setShowMinOrderError] = useState(false);
-
   useEffect(() => {
     if (isOpen) {
+      if (closeTimerRef.current) {
+        clearTimeout(closeTimerRef.current);
+        closeTimerRef.current = null;
+      }
       setStep("details");
-      setShowMinOrderError(false);
       setUsePoints(false);
+      setLockedAmount(null);
+      setSecondsLeft(5);
+      setCountdownStarted(false);
+      setSuccessHeading("Order Placed!");
+      hasSubmittedRef.current = false;
+      verificationHandledRef.current = false;
+      leftAppRef.current = false;
 
       const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
       let code = "";
@@ -84,22 +98,25 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
         code += chars.charAt(Math.floor(Math.random() * chars.length));
       }
       setPaymentCode(code);
+    } else if (closeTimerRef.current) {
+      clearTimeout(closeTimerRef.current);
+      closeTimerRef.current = null;
     }
   }, [isOpen]);
 
+  useEffect(() => {
+    return () => {
+      if (closeTimerRef.current) {
+        clearTimeout(closeTimerRef.current);
+      }
+    };
+  }, []);
+
   const handleProceedToMethod = (e: React.FormEvent) => {
     e.preventDefault();
-    if (name && phone && room && hostel) {
-      if (hostel !== "Gaumukh" && total < 150 && !isPromoActive) {
-        setShowMinOrderError(true);
-        setTimeout(() => setShowMinOrderError(false), 4000);
-        return;
-      }
-      setShowMinOrderError(false);
+    if (name && phone) {
       localStorage.setItem("snackbox_name", name);
       localStorage.setItem("snackbox_phone", phone);
-      localStorage.setItem("snackbox_hostel", hostel);
-      localStorage.setItem("snackbox_room", room);
 
       if (finalTotal <= 0) {
         // Fully paid with points!
@@ -142,14 +159,14 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
     }
   };
 
-  const handleFinish = (method: "cod" | "prepaid") => {
+  const triggerCelebration = (heading: string) => {
+    setSuccessHeading(heading);
     playSuccessChime();
     setStep("success");
-    const duration = 3000; // longer duration for a demure fall
+    const duration = 3000;
     const end = Date.now() + duration;
 
     const frame = () => {
-      // Demure top-to-bottom fall (like snow, but with confetti colors)
       confetti({
         particleCount: 5,
         angle: 270,
@@ -166,15 +183,22 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
       }
     };
     frame();
-    
+  };
+
+  const handleFinish = (method: "cod" | "prepaid") => {
+    if (hasSubmittedRef.current) return;
+    hasSubmittedRef.current = true;
+    setLockedAmount(prepaidTotal.toFixed(2));
+    triggerCelebration("Order Placed!");
+
     onComplete({
       name,
       phone,
-      room: `${hostel} - ${room}`,
+      room: "Pickup",
       id: paymentCode,
       paymentMethod: method,
       pointsUsed: pointsToRedeem,
-      serviceCharge,
+      serviceCharge: 0,
     }); // Send DB request immediately so it processes in background
 
     setTimeout(() => {
@@ -182,6 +206,201 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
       else onClose(); // Close modal after confetti completes
     }, 2500);
   };
+
+  const handleStartUpiVerification = () => {
+    setLockedAmount(prepaidTotal.toFixed(2));
+    setSecondsLeft(5);
+    setCountdownStarted(false);
+    verificationHandledRef.current = false;
+    leftAppRef.current = false;
+
+    if (!hasSubmittedRef.current) {
+      hasSubmittedRef.current = true;
+      onComplete({
+        name,
+        phone,
+        room: "Pickup",
+        id: paymentCode,
+        paymentMethod: "prepaid",
+        pointsUsed: pointsToRedeem,
+        serviceCharge: 0,
+      });
+    }
+
+    setStep("payment_app");
+  };
+
+  // Detect real-time verification from parent orders prop
+  useEffect(() => {
+    if (!isOpen || step !== "payment_app" || !paymentCode) return;
+    const matchedOrder = orders.find((o) => o.id === paymentCode);
+    if (matchedOrder?.paymentVerified && !verificationHandledRef.current) {
+      verificationHandledRef.current = true;
+      triggerCelebration("Payment Verified!");
+      if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
+      closeTimerRef.current = setTimeout(() => {
+        if (onSuccessClose) onSuccessClose();
+        else onClose();
+      }, 2500);
+    }
+  }, [isOpen, step, paymentCode, orders]);
+
+  // Detect when user leaves to the UPI app and returns to the app before starting the 5s countdown
+  useEffect(() => {
+    if (!isOpen || step !== "payment_app" || countdownStarted) return;
+
+    if (document.visibilityState === "hidden" || document.hidden) {
+      leftAppRef.current = true;
+    }
+
+    let resumeTimer: ReturnType<typeof setTimeout> | null = null;
+    let fallbackTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const clearPendingTimers = () => {
+      if (resumeTimer) {
+        clearTimeout(resumeTimer);
+        resumeTimer = null;
+      }
+      if (fallbackTimer) {
+        clearTimeout(fallbackTimer);
+        fallbackTimer = null;
+      }
+    };
+
+    const beginCountdown = () => {
+      if (verificationHandledRef.current) return;
+      if (document.visibilityState === "visible" && !document.hidden) {
+        clearPendingTimers();
+        setSecondsLeft(5);
+        setCountdownStarted(true);
+      }
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "hidden" || document.hidden) {
+        leftAppRef.current = true;
+        clearPendingTimers();
+      } else if (document.visibilityState === "visible") {
+        if (leftAppRef.current) {
+          clearPendingTimers();
+          resumeTimer = setTimeout(beginCountdown, 150);
+        }
+      }
+    };
+
+    const handleBlur = () => {
+      leftAppRef.current = true;
+      clearPendingTimers();
+    };
+
+    const handleReturnFocus = () => {
+      if (leftAppRef.current && document.visibilityState === "visible" && !document.hidden) {
+        if (resumeTimer) clearTimeout(resumeTimer);
+        // Short settle delay so an OS app-chooser closing into the UPI app doesn't false-trigger
+        resumeTimer = setTimeout(() => {
+          if (document.visibilityState === "visible" && !document.hidden) {
+            beginCountdown();
+          }
+        }, 350);
+      }
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("blur", handleBlur);
+    window.addEventListener("focus", handleReturnFocus);
+    window.addEventListener("pageshow", handleReturnFocus);
+
+    // Fallback: if no external UPI app opened (e.g. desktop or unsupported browser),
+    // start once we confirm user remained active on the app.
+    fallbackTimer = setTimeout(() => {
+      if (
+        !leftAppRef.current &&
+        document.visibilityState === "visible" &&
+        !document.hidden &&
+        document.hasFocus()
+      ) {
+        beginCountdown();
+      }
+    }, 2500);
+
+    return () => {
+      clearPendingTimers();
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("blur", handleBlur);
+      window.removeEventListener("focus", handleReturnFocus);
+      window.removeEventListener("pageshow", handleReturnFocus);
+    };
+  }, [isOpen, step, countdownStarted]);
+
+  // Supabase verification poll (active while visible on payment_app, including right when returning)
+  useEffect(() => {
+    if (!isOpen || step !== "payment_app" || !paymentCode) return;
+
+    const checkVerification = async () => {
+      if (!supabase || verificationHandledRef.current) return;
+      if (document.visibilityState === "hidden") return;
+      const { data } = await supabase
+        .from("orders")
+        .select("room, payment_verified")
+        .eq("id", paymentCode)
+        .maybeSingle();
+      const isVerified =
+        data &&
+        (data.payment_verified === true ||
+          (typeof data.room === "string" && data.room.includes("||V:OK")));
+      if (isVerified && !verificationHandledRef.current) {
+        verificationHandledRef.current = true;
+        triggerCelebration("Payment Verified!");
+        if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
+        closeTimerRef.current = setTimeout(() => {
+          if (onSuccessClose) onSuccessClose();
+          else onClose();
+        }, 2500);
+      }
+    };
+
+    checkVerification();
+    const pollInterval = setInterval(checkVerification, 800);
+    const onVisibleCheck = () => {
+      if (document.visibilityState === "visible") {
+        checkVerification();
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibleCheck);
+    window.addEventListener("focus", onVisibleCheck);
+
+    return () => {
+      clearInterval(pollInterval);
+      document.removeEventListener("visibilitychange", onVisibleCheck);
+      window.removeEventListener("focus", onVisibleCheck);
+    };
+  }, [isOpen, step, paymentCode]);
+
+  // 5-second verification countdown (runs only after countdownStarted is true)
+  useEffect(() => {
+    if (!isOpen || step !== "payment_app" || !paymentCode || !countdownStarted) return;
+
+    const countdownInterval = setInterval(() => {
+      setSecondsLeft((prev) => (prev > 1 ? prev - 1 : 0));
+    }, 1000);
+
+    const timeoutTimer = setTimeout(() => {
+      if (!verificationHandledRef.current) {
+        verificationHandledRef.current = true;
+        triggerCelebration("Order Placed!");
+        if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
+        closeTimerRef.current = setTimeout(() => {
+          if (onSuccessClose) onSuccessClose();
+          else onClose();
+        }, 2500);
+      }
+    }, 5000);
+
+    return () => {
+      clearInterval(countdownInterval);
+      clearTimeout(timeoutTimer);
+    };
+  }, [isOpen, step, paymentCode, countdownStarted]);
 
   return (
     <AnimatePresence>
@@ -191,7 +410,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            onClick={onClose}
+            onClick={step === "payment_app" || step === "success" ? undefined : onClose}
             className="absolute inset-0 bg-black/60 glass-backdrop-md"
           />
 
@@ -199,12 +418,12 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
             initial={{ opacity: 0, scale: 0.95, y: 20 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.95, y: 20 }}
-            className="glass-panel w-full max-w-md rounded-[2.5rem] p-6 sm:p-8 relative z-10 shadow-2xl border border-white/20 max-h-[90dvh] flex flex-col overflow-y-auto"
+            className="glass-panel w-full max-w-md rounded-3xl sm:rounded-[2.5rem] p-5 sm:p-8 relative z-10 shadow-2xl border border-white/20 max-h-[90dvh] flex flex-col overflow-y-auto"
           >
-            {step !== "success" && (
+            {step !== "success" && step !== "payment_app" && (
               <button
                 onClick={onClose}
-                className="absolute top-6 right-6 p-2 rounded-full bg-white/10 hover:bg-white/20 transition"
+                className="absolute top-4 right-4 sm:top-6 sm:right-6 p-2 rounded-full bg-white/10 hover:bg-white/20 transition z-20"
               >
                 <X size={20} />
               </button>
@@ -217,12 +436,12 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
                 animate={{ opacity: 1, x: 0 }}
                 exit={{ opacity: 0, x: 20 }}
               >
-                <h2 className="text-2xl font-bold mb-2">Delivery Details</h2>
-                <p className="text-white/60 mb-6 text-sm">
-                  Where should we drop off your snacks?
+                <h2 className="text-xl sm:text-2xl font-bold mb-1.5 pr-8">Pickup Details</h2>
+                <p className="text-white/60 mb-5 sm:mb-6 text-sm">
+                  Enter your details for order pickup.
                 </p>
 
-                <form onSubmit={handleProceedToMethod} className="space-y-4">
+                <form onSubmit={handleProceedToMethod} className="space-y-3.5 sm:space-y-4">
                   <div>
                     <label className="block text-sm text-white/70 mb-1 ml-1">
                       Name
@@ -234,7 +453,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
                       onChange={(e) => setName(e.target.value)}
                       pattern="^[A-Za-z\s]{3,}$"
                       title="Name must be at least 3 alphabets long"
-                      className="glass-input w-full p-4 rounded-2xl"
+                      className="glass-input w-full p-3.5 sm:p-4 rounded-xl sm:rounded-2xl"
                       placeholder="Your Name"
                     />
                   </div>
@@ -250,47 +469,14 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
                       pattern="^[0-9]{10}$"
                       maxLength={10}
                       title="Phone number must be exactly 10 digits"
-                      className="glass-input w-full p-4 rounded-2xl"
+                      className="glass-input w-full p-3.5 sm:p-4 rounded-xl sm:rounded-2xl"
                       placeholder="9876543210"
                     />
                   </div>
-                  <div>
-                    <label className="block text-sm text-white/70 mb-1 ml-1">
-                      Hostel
-                    </label>
-                    <select
-                      required
-                      value={hostel}
-                      onChange={(e) => setHostel(e.target.value)}
-                      className="glass-input w-full p-4 rounded-2xl appearance-none bg-black/40 text-white [&>option]:bg-[#1a1a2e]"
-                    >
-                      <option value="Gaumukh">Gaumukh (Free)</option>
-                      <option value="Aravalli">Aravalli (+₹30 Service Charge)</option>
-                      <option value="Vindhyancal">Vindhyancal (+₹30 Service Charge)</option>
-                      <option value="Nanda Devi">Nanda Devi (+₹30 Service Charge)</option>
-                      <option value="New Boys Hostel">New Boys Hostel (+₹30 Service Charge)</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-sm text-white/70 mb-1 ml-1">
-                      Room Number
-                    </label>
-                    <input
-                      required
-                      type="text"
-                      value={room}
-                      onChange={(e) => setRoom(e.target.value)}
-                      pattern="^[A-Za-z0-9\s\-]+$"
-                      title="Room number can only contain alphanumeric characters, spaces and hyphens"
-                      className="glass-input w-full p-4 rounded-2xl"
-                      placeholder="A-402"
-                    />
-                  </div>
 
-
-                  <div className="pt-4 border-t border-white/10 mt-6 relative">
+                  <div className="pt-4 border-t border-white/10 mt-5 sm:mt-6 relative">
                     <label
-                      className={`flex items-start gap-3 p-4 mb-4 rounded-2xl border transition-colors group ${cravePoints > 0 ? "bg-white/5 border-white/10 cursor-pointer hover:bg-white/10" : "bg-black/20 border-white/5 opacity-80 cursor-not-allowed"}`}
+                      className={`flex items-start gap-3 p-3.5 sm:p-4 mb-4 rounded-xl sm:rounded-2xl border transition-colors group ${cravePoints > 0 ? "bg-white/5 border-white/10 cursor-pointer hover:bg-white/10" : "bg-black/20 border-white/5 opacity-80 cursor-not-allowed"}`}
                     >
                       <div className="pt-0.5">
                         <input
@@ -339,12 +525,6 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
                         <span>Cart Total</span>
                         <span>₹{total.toFixed(2)}</span>
                       </div>
-                      {serviceCharge > 0 && (
-                        <div className="flex justify-between items-center text-sm text-white/60">
-                          <span>Service Charge ({hostel})</span>
-                          <span>+ ₹{serviceCharge.toFixed(2)}</span>
-                        </div>
-                      )}
                       {usePoints && pointsToRedeem > 0 && (
                         <div className="flex justify-between items-center text-sm text-pink-400">
                           <span>Crave Candy point discount</span>
@@ -353,43 +533,14 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
                       )}
                       <div className="flex justify-between items-center border-t border-white/10 pt-2 mt-1 relative">
                         <span className="text-white/70">Total Amount</span>
-                        <span 
-                          className="text-2xl font-bold cursor-pointer"
-                          onClick={() => setSecretTaps(prev => prev + 1)}
-                        >
+                        <span className="text-2xl font-bold">
                           ₹{finalTotal.toFixed(2)}
                         </span>
-                        <AnimatePresence>
-                          {isPromoActive && (
-                            <motion.div
-                              initial={{ opacity: 0, y: 10, scale: 0.8 }}
-                              animate={{ opacity: 1, y: 0, scale: 1 }}
-                              exit={{ opacity: 0, scale: 0.8 }}
-                              className="absolute -top-10 right-0 bg-green-500 text-black text-xs font-bold px-3 py-1.5 rounded-xl shadow-lg pointer-events-none"
-                            >
-                              No Minimum Order!
-                            </motion.div>
-                          )}
-                        </AnimatePresence>
                       </div>
                     </div>
                   </div>
 
                   <div className="relative mt-2">
-                    <AnimatePresence>
-                      {showMinOrderError && (
-                        <motion.div
-                          initial={{ opacity: 0, y: 10, scale: 0.95 }}
-                          animate={{ opacity: 1, y: 0, scale: 1 }}
-                          exit={{ opacity: 0, y: 10, scale: 0.95 }}
-                          className="absolute bottom-[calc(100%+16px)] left-1/2 -translate-x-1/2 w-max max-w-full bg-red-500 text-white text-sm font-bold py-2.5 px-5 rounded-2xl shadow-[0_10px_40px_rgba(239,68,68,0.4)] z-50 pointer-events-none"
-                        >
-                          Minimum order for {hostel} is ₹150
-                          <div className="absolute -bottom-1.5 left-1/2 -translate-x-1/2 w-3 h-3 bg-red-500 rotate-45 transform origin-center rounded-sm" />
-                        </motion.div>
-                      )}
-                    </AnimatePresence>
-
                     <button
                       type="submit"
                       className="w-full bg-white text-black font-semibold rounded-full p-4 flex items-center justify-center gap-2 hover:bg-gray-200 transition"
@@ -418,27 +569,21 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
               >
                 <button
                   onClick={() => setStep("details")}
-                  className="text-white/50 text-sm hover:text-white mb-4 block"
+                  className="text-white/50 text-sm hover:text-white mb-3 py-1 -ml-1 px-1 block"
                 >
                   ← Back to Details
                 </button>
-                <h2 className="text-2xl font-bold mb-1">Online Payment</h2>
+                <h2 className="text-xl sm:text-2xl font-bold mb-1 pr-8">Online Payment</h2>
                 <p className="text-white/60 mb-4 text-sm">
                   Choose how you want to pay.
                 </p>
 
                 {/* Total & Cost Breakdown */}
-                <div className="bg-white/5 border border-white/10 rounded-2xl p-4 mb-5 flex flex-col gap-2">
+                <div className="bg-white/5 border border-white/10 rounded-2xl p-3.5 sm:p-4 mb-4 sm:mb-5 flex flex-col gap-2">
                   <div className="flex justify-between items-center text-sm text-white/60">
                     <span>Cart Total</span>
                     <span>₹{total.toFixed(2)}</span>
                   </div>
-                  {serviceCharge > 0 && (
-                    <div className="flex justify-between items-center text-sm text-white/60">
-                      <span>Service Charge ({hostel})</span>
-                      <span>+ ₹{serviceCharge.toFixed(2)}</span>
-                    </div>
-                  )}
                   {usePoints && pointsToRedeem > 0 && (
                     <div className="flex justify-between items-center text-sm text-pink-400">
                       <span>Crave Candy point discount</span>
@@ -447,14 +592,14 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
                   )}
                   <div className="flex justify-between items-center border-t border-white/10 pt-2 mt-1">
                     <span className="text-white/80 font-medium">Total Amount</span>
-                    <span className="text-2xl font-bold text-white">
+                    <span className="text-xl sm:text-2xl font-bold text-white">
                       ₹{formattedAmount}
                     </span>
                   </div>
                 </div>
 
                 {!cleanUpiId && (
-                  <div className="bg-red-500/10 border border-red-500/30 rounded-2xl p-4 mb-3 flex items-start gap-3 text-left">
+                  <div className="bg-red-500/10 border border-red-500/30 rounded-2xl p-3.5 sm:p-4 mb-3 flex items-start gap-3 text-left">
                     <AlertCircle size={20} className="text-red-400 shrink-0 mt-0.5" />
                     <div className="text-sm text-red-200">
                       UPI ID is not configured in Payment Config. Please set a UPI ID in the Dev Page or pay with COD below.
@@ -467,17 +612,17 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
                     <a
                       href={upiLink}
                       target="_top"
-                      onClick={() => setStep("payment_app")}
-                      className="w-full h-full min-h-[88px] bg-white/10 hover:bg-white/20 border border-white/10 rounded-2xl p-4 flex items-center justify-start gap-4 transition-colors group cursor-pointer"
+                      onClick={handleStartUpiVerification}
+                      className="w-full h-full min-h-[80px] sm:min-h-[88px] bg-white/10 hover:bg-white/20 border border-white/10 rounded-2xl p-3.5 sm:p-4 flex items-center justify-start gap-3 sm:gap-4 transition-colors group cursor-pointer"
                     >
-                      <div className="w-12 h-12 rounded-full bg-pink-500/20 text-pink-400 flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform">
-                        <Smartphone size={24} />
+                      <div className="w-11 h-11 sm:w-12 sm:h-12 rounded-full bg-pink-500/20 text-pink-400 flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform">
+                        <Smartphone size={22} className="sm:w-6 sm:h-6" />
                       </div>
                       <div className="text-left flex-1 min-w-0">
-                        <h3 className="font-bold text-lg mb-0.5">
+                        <h3 className="font-bold text-base sm:text-lg mb-0.5">
                           Pay with UPI App
                         </h3>
-                        <p className="text-sm text-white/50 truncate">
+                        <p className="text-xs sm:text-sm text-white/50 truncate">
                           Pay ₹{formattedAmount} via UPI app
                         </p>
                       </div>
@@ -486,14 +631,14 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
 
                   <button
                     onClick={() => handleFinish("cod")}
-                    className="w-full h-full min-h-[88px] bg-white/10 hover:bg-white/20 border border-white/10 rounded-2xl p-4 flex items-center justify-start gap-4 transition-colors group"
+                    className="w-full h-full min-h-[80px] sm:min-h-[88px] bg-white/10 hover:bg-white/20 border border-white/10 rounded-2xl p-3.5 sm:p-4 flex items-center justify-start gap-3 sm:gap-4 transition-colors group"
                   >
-                    <div className="w-12 h-12 rounded-full bg-green-500/20 text-green-400 flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform">
-                      <Banknote size={24} />
+                    <div className="w-11 h-11 sm:w-12 sm:h-12 rounded-full bg-green-500/20 text-green-400 flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform">
+                      <Banknote size={22} className="sm:w-6 sm:h-6" />
                     </div>
                     <div className="text-left flex-1 min-w-0">
-                      <h3 className="font-bold text-lg mb-0.5">COD</h3>
-                      <p className="text-sm text-white/50 truncate">
+                      <h3 className="font-bold text-base sm:text-lg mb-0.5">COD</h3>
+                      <p className="text-xs sm:text-sm text-white/50 truncate">
                         Pay when your snacks arrive
                       </p>
                     </div>
@@ -505,57 +650,78 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
             {step === "payment_app" && (
               <motion.div
                 key="payment_app"
-                initial={{ opacity: 0, x: -20 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: 20 }}
-                className="text-center"
+                initial={{ opacity: 0, scale: 0.94 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.94 }}
+                className="text-center py-8 px-2 flex flex-col items-center justify-center"
               >
-                <button
-                  onClick={() => setStep("payment_online_choice")}
-                  className="text-white/50 text-sm hover:text-white mb-3 block"
-                >
-                  ← Back
-                </button>
-                <h2 className="text-2xl font-bold mb-1">
-                  Complete UPI Payment
+                {/* Cool multi-ring orbital loader */}
+                <div className="relative w-32 h-32 mx-auto mb-7 flex items-center justify-center">
+                  {/* Ambient radial aura */}
+                  <motion.div
+                    animate={{ scale: [1, 1.18, 1], opacity: [0.45, 0.85, 0.45] }}
+                    transition={{ duration: 2.2, repeat: Infinity, ease: "easeInOut" }}
+                    className="absolute inset-0 rounded-full bg-gradient-to-tr from-pink-500/40 via-purple-500/30 to-indigo-500/40 blur-2xl"
+                  />
+
+                  {/* Outer dual-arc spinning ring */}
+                  <motion.div
+                    animate={{ rotate: 360 }}
+                    transition={{ duration: 1.8, repeat: Infinity, ease: "linear" }}
+                    className="absolute inset-0 rounded-full border-[3px] border-transparent border-t-pink-400 border-r-indigo-400 shadow-[0_0_24px_rgba(236,72,153,0.45)]"
+                  />
+
+                  {/* Middle counter-rotating dashed orbit */}
+                  <motion.div
+                    animate={{ rotate: -360 }}
+                    transition={{ duration: 3.2, repeat: Infinity, ease: "linear" }}
+                    className="absolute inset-3 rounded-full border-2 border-dashed border-white/25"
+                  />
+
+                  {/* Inner glowing ring */}
+                  <motion.div
+                    animate={{ rotate: 360 }}
+                    transition={{ duration: 1.2, repeat: Infinity, ease: "linear" }}
+                    className="absolute inset-6 rounded-full border-2 border-transparent border-b-cyan-400 border-l-purple-400"
+                  />
+
+                  {/* Center glass core */}
+                  <motion.div
+                    animate={{ scale: [0.95, 1.06, 0.95] }}
+                    transition={{ duration: 1.6, repeat: Infinity, ease: "easeInOut" }}
+                    className="w-14 h-14 rounded-2xl bg-gradient-to-br from-pink-500/25 to-indigo-500/25 border border-white/20 backdrop-blur-md flex items-center justify-center shadow-inner"
+                  >
+                    <Smartphone size={26} className="text-pink-300" />
+                  </motion.div>
+                </div>
+
+                <h2 className="text-2xl sm:text-3xl font-bold tracking-tight mb-2 bg-gradient-to-r from-white via-pink-100 to-indigo-200 bg-clip-text text-transparent">
+                  Verifying Payment
                 </h2>
-                <p className="text-white/60 mb-5 text-sm px-2">
-                  Complete the payment of{" "}
-                  <b className="text-white">₹{formattedAmount}</b> in your UPI
-                  app.
+                <p className="text-white/60 text-sm mb-6 max-w-xs">
+                  Checking confirmation for{" "}
+                  <span className="text-white font-semibold">₹{formattedAmount}</span>{" "}
+                  <span className="text-white/40 font-mono">(#{paymentCode})</span>
                 </p>
 
-                <div className="bg-white/5 border border-white/10 p-5 rounded-3xl mx-auto mb-5 flex items-center justify-center flex-col gap-3">
-                  <div className="w-14 h-14 rounded-full bg-pink-500/20 text-pink-400 flex items-center justify-center animate-pulse">
-                    <Smartphone size={28} />
-                  </div>
-                  <div className="text-2xl font-bold text-white">
-                    ₹{formattedAmount}
-                  </div>
-                  <p className="text-xs text-white/60">
-                    Order Code:{" "}
-                    <span className="font-mono font-bold text-white">
-                      {paymentCode}
-                    </span>
-                  </p>
+                {/* Smooth 5-second progress bar (starts once user is back on the app) */}
+                <div className="w-full max-w-xs bg-white/10 h-1.5 rounded-full overflow-hidden mb-3">
+                  <motion.div
+                    initial={{ width: "0%" }}
+                    animate={{ width: countdownStarted ? "100%" : "0%" }}
+                    transition={
+                      countdownStarted
+                        ? { duration: 5, ease: "linear" }
+                        : { duration: 0.2 }
+                    }
+                    className="h-full rounded-full bg-gradient-to-r from-pink-500 via-purple-400 to-indigo-400 shadow-[0_0_12px_rgba(236,72,153,0.7)]"
+                  />
                 </div>
-
-                <div className="flex flex-col gap-2.5 mb-5">
-                  <a
-                    href={upiLink}
-                    target="_top"
-                    className="w-full bg-white/10 hover:bg-white/20 border border-white/15 text-white font-medium rounded-full py-3 px-4 flex items-center justify-center gap-2 text-sm transition"
-                  >
-                    <ExternalLink size={16} /> Open UPI App Again
-                  </a>
-                </div>
-
-                <button
-                  onClick={() => handleFinish("prepaid")}
-                  className="w-full bg-gradient-to-r from-pink-500 to-indigo-500 text-white font-semibold rounded-full p-4 flex items-center justify-center gap-2 hover:opacity-90 transition shadow-[0_0_20px_rgba(236,72,153,0.3)]"
-                >
-                  <CheckCircle size={18} /> I have paid
-                </button>
+                <p className="text-xs text-white/40 font-medium tracking-wide">
+                  {countdownStarted
+                    ? `Redirecting to your orders in ${secondsLeft}s...`
+                    : "Waiting for you to return from UPI app..."}
+                </p>
               </motion.div>
             )}
 
@@ -574,10 +740,9 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
                 >
                   <CheckCircle size={40} />
                 </motion.div>
-                <h2 className="text-3xl font-bold mb-2">Order Placed!</h2>
+                <h2 className="text-3xl font-bold mb-2">{successHeading}</h2>
                 <p className="text-white/70">
-                  Your snacks are being prepared. Keep an eye out for our
-                  delivery buddy.
+                  Your snacks are being prepared for pickup.
                 </p>
               </motion.div>
             )}

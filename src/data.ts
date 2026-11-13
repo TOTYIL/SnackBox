@@ -36,6 +36,7 @@ export interface Order {
   cravePointsDisabled?: boolean;
   dbRoom?: string;
   shakeSeen?: boolean;
+  paymentVerified?: boolean;
 }
 
 export interface MainCategory {

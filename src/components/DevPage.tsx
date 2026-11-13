@@ -203,13 +203,17 @@ export const DevPage: React.FC<DevPageProps> = ({
           let pointsUsed = 0;
           if (o.payment_method) {
             paymentMethod = o.payment_method;
-          } else if (typeof o.room === "string" && o.room.includes("||")) {
+          }
+          if (typeof o.room === "string" && o.room.includes("||")) {
             const parts = o.room.split("||");
             actualRoom = parts[0];
-            paymentMethod = parts[1] as any;
-            if (parts.length > 2 && parts[2].startsWith("P:")) {
-              pointsUsed = Number(parts[2].substring(2));
-            }
+            parts.slice(1).forEach((part: string) => {
+              if (!paymentMethod && (part === "cod" || part === "prepaid")) {
+                paymentMethod = part as any;
+              } else if (part.startsWith("P:")) {
+                pointsUsed = Number(part.substring(2));
+              }
+            });
           }
 
           let statusToUse = o.status;
@@ -242,6 +246,11 @@ export const DevPage: React.FC<DevPageProps> = ({
           const prepaidDiscount = 0;
           const cravePointsDisabled = o.crave_points_disabled === true || (typeof o.room === "string" && o.room.includes("||C:NO"));
           const shakeSeen = typeof o.room === "string" && o.room.includes("||S:OK");
+          const recentPay = recentlyUpdatedPaymentRef.current[o.id];
+          const paymentVerified =
+            recentPay && Date.now() - recentPay.timestamp < 10000
+              ? recentPay.verified
+              : o.payment_verified === true || (typeof o.room === "string" && o.room.includes("||V:OK"));
 
           let serviceCharge = 0;
           if (typeof actualRoom === "string" && actualRoom.includes(" - ") && !actualRoom.startsWith("Gaumukh")) {
@@ -263,6 +272,7 @@ export const DevPage: React.FC<DevPageProps> = ({
             serviceCharge,
             cravePointsDisabled,
             shakeSeen,
+            paymentVerified,
             date: o.date,
             total: calculatedTotal,
             status: statusToUse,
@@ -280,6 +290,9 @@ export const DevPage: React.FC<DevPageProps> = ({
   const processingOrdersRef = useRef<Set<string>>(new Set());
   const recentlyUpdatedOrdersRef = useRef<
     Record<string, { status: Order["status"]; timestamp: number }>
+  >({});
+  const recentlyUpdatedPaymentRef = useRef<
+    Record<string, { verified: boolean; timestamp: number }>
   >({});
 
   const updateOrderStatus = async (
@@ -406,6 +419,32 @@ export const DevPage: React.FC<DevPageProps> = ({
     setOrders((prev) => prev.map((o) => o.id === orderId ? { ...o, dbRoom: newDbRoom, cravePointsDisabled: !isDisabled } : o));
 
     await supabase.from("orders").update({ room: newDbRoom }).eq("id", orderId);
+  };
+
+  const handleSetPaymentVerified = async (
+    orderId: string,
+    currentDbRoom: string,
+    verified: boolean,
+  ) => {
+    const cleanBase = (currentDbRoom || "").split("||V:OK").join("");
+    const newDbRoom = verified ? `${cleanBase}||V:OK` : cleanBase;
+
+    recentlyUpdatedPaymentRef.current[orderId] = {
+      verified,
+      timestamp: Date.now(),
+    };
+    logAction("toggle_payment_verified", { orderId, verified, newDbRoom });
+    setOrders((prev) =>
+      prev.map((o) =>
+        o.id === orderId
+          ? { ...o, dbRoom: newDbRoom, paymentVerified: verified }
+          : o,
+      ),
+    );
+
+    if (supabase) {
+      await supabase.from("orders").update({ room: newDbRoom }).eq("id", orderId);
+    }
   };
 
   const handleShakeSeen = async (orderId: string, currentDbRoom: string | undefined) => {
@@ -1184,45 +1223,45 @@ export const DevPage: React.FC<DevPageProps> = ({
           </motion.div>
         )}
       </AnimatePresence>
-      <div className="max-w-5xl mx-auto p-4 sm:p-6 md:p-8">
+      <div className="max-w-5xl mx-auto p-3 sm:p-6 md:p-8">
         {/* Header */}
-        <div className="flex flex-col gap-6 mb-8 pt-4">
-          <div className="flex items-center gap-4">
+        <div className="flex flex-col gap-4 sm:gap-6 mb-5 sm:mb-8 pt-2 sm:pt-4">
+          <div className="flex items-center gap-3 sm:gap-4">
             <button
               onClick={onClose}
               className="p-2 glass-button rounded-full shrink-0"
             >
               <ArrowLeft size={20} />
             </button>
-            <h1 className="text-2xl sm:text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-pink-400 to-indigo-400">
+            <h1 className="text-xl sm:text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-pink-400 to-indigo-400">
               Developer Hub
             </h1>
           </div>
 
           {/* Tab Ribbon */}
-          <div className="flex flex-wrap gap-2 pb-2 border-b border-white/10">
+          <div className="flex flex-nowrap overflow-x-auto gap-1.5 sm:gap-2 pb-2 border-b border-white/10 no-scrollbar [&::-webkit-scrollbar]:hidden">
             <button
               onClick={() => setActiveTab("orders")}
-              className={`flex flex-1 justify-center items-center gap-2 px-3 sm:px-5 py-3 rounded-t-xl transition-colors font-medium text-sm sm:text-base ${activeTab === "orders" ? "bg-white/10 text-white border-b-2 border-pink-400" : "text-white/60 hover:text-white"}`}
+              className={`flex flex-1 min-w-[54px] justify-center items-center gap-1.5 sm:gap-2 px-2.5 sm:px-5 py-2.5 sm:py-3 rounded-t-xl transition-colors font-medium text-sm sm:text-base shrink-0 ${activeTab === "orders" ? "bg-white/10 text-white border-b-2 border-pink-400" : "text-white/60 hover:text-white"}`}
             >
               <ClipboardList size={18} className="shrink-0" />{" "}
               <span className="hidden sm:inline">Live Orders</span>
               {liveOrders.length > 0 && (
-                <span className="bg-pink-500 text-white text-xs px-2 py-0.5 rounded-full ml-1">
+                <span className="bg-pink-500 text-white text-[10px] sm:text-xs px-1.5 sm:px-2 py-0.5 rounded-full ml-0.5 sm:ml-1">
                   {liveOrders.length}
                 </span>
               )}
             </button>
             <button
               onClick={() => setActiveTab("inventory")}
-              className={`flex flex-1 justify-center items-center gap-2 px-3 sm:px-5 py-3 rounded-t-xl transition-colors font-medium text-sm sm:text-base ${activeTab === "inventory" ? "bg-white/10 text-white border-b-2 border-indigo-400" : "text-white/60 hover:text-white"}`}
+              className={`flex flex-1 min-w-[54px] justify-center items-center gap-1.5 sm:gap-2 px-2.5 sm:px-5 py-2.5 sm:py-3 rounded-t-xl transition-colors font-medium text-sm sm:text-base shrink-0 ${activeTab === "inventory" ? "bg-white/10 text-white border-b-2 border-indigo-400" : "text-white/60 hover:text-white"}`}
             >
               <PackageSearch size={18} className="shrink-0" />{" "}
               <span className="hidden sm:inline">Inventory</span>
             </button>
             <button
               onClick={() => setActiveTab("payment")}
-              className={`flex flex-1 justify-center items-center gap-2 px-3 sm:px-5 py-3 rounded-t-xl transition-colors font-medium text-sm sm:text-base ${activeTab === "payment" ? "bg-white/10 text-white border-b-2 border-green-400" : "text-white/60 hover:text-white"}`}
+              className={`flex flex-1 min-w-[54px] justify-center items-center gap-1.5 sm:gap-2 px-2.5 sm:px-5 py-2.5 sm:py-3 rounded-t-xl transition-colors font-medium text-sm sm:text-base shrink-0 ${activeTab === "payment" ? "bg-white/10 text-white border-b-2 border-green-400" : "text-white/60 hover:text-white"}`}
             >
               <CreditCard size={18} className="shrink-0" />{" "}
               <span className="hidden sm:inline">
@@ -1231,7 +1270,7 @@ export const DevPage: React.FC<DevPageProps> = ({
             </button>
             <button
               onClick={() => setActiveTab("analytics")}
-              className={`flex flex-1 justify-center items-center gap-2 px-3 sm:px-5 py-3 rounded-t-xl transition-colors font-medium text-sm sm:text-base ${activeTab === "analytics" ? "bg-white/10 text-white border-b-2 border-orange-400" : "text-white/60 hover:text-white"}`}
+              className={`flex flex-1 min-w-[54px] justify-center items-center gap-1.5 sm:gap-2 px-2.5 sm:px-5 py-2.5 sm:py-3 rounded-t-xl transition-colors font-medium text-sm sm:text-base shrink-0 ${activeTab === "analytics" ? "bg-white/10 text-white border-b-2 border-orange-400" : "text-white/60 hover:text-white"}`}
             >
               <BarChart3 size={18} className="shrink-0" />{" "}
               <span className="hidden sm:inline">Analytics</span>
@@ -1239,7 +1278,7 @@ export const DevPage: React.FC<DevPageProps> = ({
             {currentUser?.username.toLowerCase() === "totyil" && (
               <button
                 onClick={() => setActiveTab("logs")}
-                className={`flex flex-1 justify-center items-center gap-2 px-3 sm:px-5 py-3 rounded-t-xl transition-colors font-medium text-sm sm:text-base ${activeTab === "logs" ? "bg-white/10 text-white border-b-2 border-red-400" : "text-white/60 hover:text-white"}`}
+                className={`flex flex-1 min-w-[54px] justify-center items-center gap-1.5 sm:gap-2 px-2.5 sm:px-5 py-2.5 sm:py-3 rounded-t-xl transition-colors font-medium text-sm sm:text-base shrink-0 ${activeTab === "logs" ? "bg-white/10 text-white border-b-2 border-red-400" : "text-white/60 hover:text-white"}`}
               >
                 <Database size={18} className="shrink-0" />{" "}
                 <span className="hidden sm:inline">Logs</span>
@@ -1278,9 +1317,9 @@ export const DevPage: React.FC<DevPageProps> = ({
                   return (
                     <div
                       key={order.id}
-                      className={`glass-panel p-5 sm:p-6 rounded-3xl border transition-all duration-500 flex flex-col gap-6 justify-between items-start ${order.computedStatus === "rejected" ? "border-white/5 bg-white/5 grayscale opacity-60" : "border-white/20"}`}
+                      className={`glass-panel p-4 sm:p-6 rounded-2xl sm:rounded-3xl border transition-all duration-500 flex flex-col gap-4 sm:gap-6 justify-between items-start ${order.computedStatus === "rejected" ? "border-white/5 bg-white/5 grayscale opacity-60" : "border-white/20"}`}
                     >
-                      <div className="flex-1 space-y-5 w-full">
+                      <div className="flex-1 space-y-4 sm:space-y-5 w-full">
                         <div className="flex justify-between items-start gap-4 border-b border-white/10 pb-4">
                           <div className="min-w-0">
                             <h3 className="text-lg font-bold flex flex-wrap items-center gap-2">
@@ -1320,7 +1359,7 @@ export const DevPage: React.FC<DevPageProps> = ({
                             </p>
                           </div>
                           <div>
-                            <p className="text-xs text-white/50 mb-1">Room</p>
+                            <p className="text-xs text-white/50 mb-1">Pickup / Details</p>
                             <p className="font-medium text-sm text-pink-300">
                               {order.room}
                             </p>
@@ -1335,11 +1374,50 @@ export const DevPage: React.FC<DevPageProps> = ({
                             </p>
                             <p className="font-medium text-[11px] sm:text-xs text-indigo-300 uppercase">
                               {order.paymentMethod === "prepaid"
-                                ? "Prepaid (Pay Now)"
+                                ? "Prepaid (UPI)"
                                 : order.paymentMethod === "cod"
                                   ? "Cash on Delivery (COD)"
                                   : "Not Specified"}
                             </p>
+                          </div>
+                          <div>
+                            <p className="text-xs text-white/50 mb-1">Payment Verification</p>
+                            <div className="inline-flex items-center p-0.5 rounded-full bg-black/40 border border-white/10 mt-0.5">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  handleSetPaymentVerified(
+                                    order.id,
+                                    order.dbRoom || order.room,
+                                    false,
+                                  )
+                                }
+                                className={`px-2.5 py-1 rounded-full text-[10px] sm:text-xs font-bold transition-all ${
+                                  !order.paymentVerified
+                                    ? "bg-red-500/25 text-red-300 border border-red-500/40"
+                                    : "text-white/40 hover:text-white/70 border border-transparent"
+                                }`}
+                              >
+                                Not Verified
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  handleSetPaymentVerified(
+                                    order.id,
+                                    order.dbRoom || order.room,
+                                    true,
+                                  )
+                                }
+                                className={`px-2.5 py-1 rounded-full text-[10px] sm:text-xs font-bold transition-all ${
+                                  order.paymentVerified
+                                    ? "bg-emerald-500/25 text-emerald-300 border border-emerald-500/40"
+                                    : "text-white/40 hover:text-white/70 border border-transparent"
+                                }`}
+                              >
+                                Verified
+                              </button>
+                            </div>
                           </div>
                           <div>
                             <p className="text-xs text-white/50 mb-1">Crave Candies Action</p>
@@ -1426,14 +1504,14 @@ export const DevPage: React.FC<DevPageProps> = ({
                         {/* Action Buttons */}
                         {!order.isOld &&
                           order.computedStatus !== "completed" && (
-                            <div className="flex flex-wrap gap-3 mt-4 pt-4 border-t border-white/10">
+                            <div className="flex flex-wrap gap-2.5 sm:gap-3 mt-4 pt-4 border-t border-white/10">
                               {order.computedStatus === "pending" && (
                                 <>
                                   <button
                                     onClick={() =>
                                       updateOrderStatus(order.id, "accepted")
                                     }
-                                    className="flex items-center justify-center gap-2 flex-1 bg-blue-500/20 text-blue-300 hover:bg-blue-500/30 transition py-2.5 rounded-xl font-medium"
+                                    className="flex items-center justify-center gap-2 flex-1 min-w-[135px] bg-blue-500/20 text-blue-300 hover:bg-blue-500/30 transition py-2.5 px-3 rounded-xl text-sm sm:text-base font-medium"
                                   >
                                     <Check size={16} /> Accept Order
                                   </button>
@@ -1441,7 +1519,7 @@ export const DevPage: React.FC<DevPageProps> = ({
                                     onClick={() =>
                                       updateOrderStatus(order.id, "rejected")
                                     }
-                                    className="flex items-center justify-center gap-2 flex-1 bg-red-500/20 text-red-300 hover:bg-red-500/30 transition py-2.5 rounded-xl font-medium"
+                                    className="flex items-center justify-center gap-2 flex-1 min-w-[115px] bg-red-500/20 text-red-300 hover:bg-red-500/30 transition py-2.5 px-3 rounded-xl text-sm sm:text-base font-medium"
                                   >
                                     <X size={16} /> Reject
                                   </button>
@@ -1477,7 +1555,7 @@ export const DevPage: React.FC<DevPageProps> = ({
                                     onClick={() =>
                                       updateOrderStatus(order.id, "completed")
                                     }
-                                    className="flex items-center justify-center gap-2 flex-1 bg-green-500/20 text-green-300 hover:bg-green-500/30 transition py-2.5 rounded-xl font-medium"
+                                    className="flex items-center justify-center gap-2 flex-1 min-w-[140px] bg-green-500/20 text-green-300 hover:bg-green-500/30 transition py-2.5 px-3 rounded-xl text-sm sm:text-base font-medium"
                                   >
                                     <Check size={16} /> Mark Completed
                                   </button>
@@ -1485,7 +1563,7 @@ export const DevPage: React.FC<DevPageProps> = ({
                                     onClick={() =>
                                       updateOrderStatus(order.id, "rejected")
                                     }
-                                    className="flex items-center justify-center gap-2 flex-1 bg-red-500/20 text-red-300 hover:bg-red-500/30 transition py-2.5 rounded-xl font-medium"
+                                    className="flex items-center justify-center gap-2 flex-1 min-w-[125px] bg-red-500/20 text-red-300 hover:bg-red-500/30 transition py-2.5 px-3 rounded-xl text-sm sm:text-base font-medium"
                                   >
                                     <X size={16} /> Cancel Order
                                   </button>
@@ -1493,7 +1571,7 @@ export const DevPage: React.FC<DevPageProps> = ({
                                     onClick={() =>
                                       updateOrderStatus(order.id, "pending")
                                     }
-                                    className="flex items-center justify-center gap-2 flex-1 bg-white/10 text-white hover:bg-white/20 transition py-2.5 rounded-xl font-medium w-full"
+                                    className="flex items-center justify-center gap-2 flex-1 min-w-[130px] bg-white/10 text-white hover:bg-white/20 transition py-2.5 px-3 rounded-xl text-sm sm:text-base font-medium w-full"
                                   >
                                     <RotateCcw size={16} /> Undo Accept
                                   </button>
@@ -1562,10 +1640,10 @@ export const DevPage: React.FC<DevPageProps> = ({
                           {/* Header Tile */}
                           <button
                             onClick={() => toggleDate(dateStr)}
-                            className="w-full flex justify-between items-center p-4 hover:bg-white/5 transition text-left"
+                            className="w-full flex justify-between items-center gap-3 p-3.5 sm:p-4 hover:bg-white/5 transition text-left"
                           >
-                            <div>
-                              <h4 className="font-bold text-white/90">
+                            <div className="min-w-0">
+                              <h4 className="font-bold text-sm sm:text-base text-white/90 truncate">
                                 {dateStr ===
                                 new Date().toLocaleDateString(undefined, {
                                   year: "numeric",
@@ -1580,7 +1658,7 @@ export const DevPage: React.FC<DevPageProps> = ({
                                 {dateOrders.length !== 1 ? "s" : ""}
                               </p>
                             </div>
-                            <div className="flex items-center gap-4">
+                            <div className="flex items-center gap-2.5 sm:gap-4 shrink-0">
                               <div className="text-right">
                                 <p className="text-sm font-bold text-emerald-400">
                                   ₹{dateOrders.reduce((sum, o) => sum + ((o.computedStatus === "completed" || o.status === "completed") ? o.total : 0), 0).toFixed(2)}
@@ -1606,7 +1684,7 @@ export const DevPage: React.FC<DevPageProps> = ({
                                 exit={{ height: 0, opacity: 0 }}
                                 className="border-t border-white/10"
                               >
-                                <div className="p-2 sm:p-6 flex flex-col gap-8 bg-black/20">
+                                <div className="p-2.5 sm:p-6 flex flex-col gap-4 sm:gap-8 bg-black/20">
                                   {dateOrders.map((order) => {
                                     const statusColors: Record<string, string> =
                                       {
@@ -1625,7 +1703,7 @@ export const DevPage: React.FC<DevPageProps> = ({
                                     return (
                                       <div
                                         key={order.id}
-                                        className={`bg-white/5 p-6 sm:p-8 mb-4 rounded-3xl border-0 transition-all duration-500 flex flex-col md:flex-row gap-8 justify-between items-start shadow-none relative overflow-hidden ${order.computedStatus === "rejected" ? "grayscale opacity-50" : "opacity-80"}`}
+                                        className={`bg-white/5 p-4 sm:p-8 mb-2 sm:mb-4 rounded-2xl sm:rounded-3xl border-0 transition-all duration-500 flex flex-col md:flex-row gap-4 sm:gap-8 justify-between items-start shadow-none relative overflow-hidden ${order.computedStatus === "rejected" ? "grayscale opacity-50" : "opacity-80"}`}
                                       >
                                         {clearingIds[order.id] && (
                                           <div className="absolute inset-0 bg-black/80 backdrop-blur-md z-30 flex flex-col items-center justify-center p-6 text-center">
@@ -1707,7 +1785,7 @@ export const DevPage: React.FC<DevPageProps> = ({
                                             </div>
                                             <div>
                                               <p className="text-xs text-white/50 mb-1">
-                                                Room
+                                                Pickup / Details
                                               </p>
                                               <p className="font-medium text-sm text-white/80">
                                                 {order.room}
@@ -1728,12 +1806,51 @@ export const DevPage: React.FC<DevPageProps> = ({
                                               <p className="font-medium text-[11px] sm:text-xs text-white/80 uppercase">
                                                 {order.paymentMethod ===
                                                 "prepaid"
-                                                  ? "Prepaid (Pay Now)"
+                                                  ? "Prepaid (UPI)"
                                                   : order.paymentMethod ===
                                                       "cod"
                                                     ? "Cash on Delivery (COD)"
                                                     : "Not Specified"}
                                               </p>
+                                            </div>
+                                            <div>
+                                              <p className="text-xs text-white/50 mb-1">Payment Verification</p>
+                                              <div className="inline-flex items-center p-0.5 rounded-full bg-black/40 border border-white/10 mt-0.5">
+                                                <button
+                                                  type="button"
+                                                  onClick={() =>
+                                                    handleSetPaymentVerified(
+                                                      order.id,
+                                                      order.dbRoom || order.room,
+                                                      false,
+                                                    )
+                                                  }
+                                                  className={`px-2.5 py-1 rounded-full text-[10px] sm:text-xs font-bold transition-all ${
+                                                    !order.paymentVerified
+                                                      ? "bg-red-500/25 text-red-300 border border-red-500/40"
+                                                      : "text-white/40 hover:text-white/70 border border-transparent"
+                                                  }`}
+                                                >
+                                                  Not Verified
+                                                </button>
+                                                <button
+                                                  type="button"
+                                                  onClick={() =>
+                                                    handleSetPaymentVerified(
+                                                      order.id,
+                                                      order.dbRoom || order.room,
+                                                      true,
+                                                    )
+                                                  }
+                                                  className={`px-2.5 py-1 rounded-full text-[10px] sm:text-xs font-bold transition-all ${
+                                                    order.paymentVerified
+                                                      ? "bg-emerald-500/25 text-emerald-300 border border-emerald-500/40"
+                                                      : "text-white/40 hover:text-white/70 border border-transparent"
+                                                  }`}
+                                                >
+                                                  Verified
+                                                </button>
+                                              </div>
                                             </div>
                                             <div>
                                               <p className="text-xs text-white/50 mb-1">Crave Candies Action</p>
@@ -1918,24 +2035,24 @@ export const DevPage: React.FC<DevPageProps> = ({
                 const renderInventoryCard = (product: Product) => (
                   <div
                     key={product.id}
-                    className={`glass-panel p-4 rounded-3xl border transition-all w-full flex flex-col justify-between ${editingItemId === product.id ? "border-indigo-400 bg-white/10" : "border-white/10"}`}
+                    className={`glass-panel p-3.5 sm:p-4 rounded-2xl sm:rounded-3xl border transition-all w-full flex flex-col justify-between ${editingItemId === product.id ? "border-indigo-400 bg-white/10" : "border-white/10"}`}
                   >
                     {editingItemId !== product.id ? (
                       // Display Mode Card
-                      <div className="flex gap-4">
+                      <div className="flex gap-3 sm:gap-4">
                           <div
-                            className="w-20 h-20 rounded-xl shrink-0 bg-cover bg-center"
+                            className="w-16 h-16 sm:w-20 sm:h-20 rounded-xl shrink-0 bg-cover bg-center"
                             style={{ backgroundImage: `url(${product.image})` }}
                             title={product.name}
                           />
                         <div className="flex-1 min-w-0 flex flex-col">
-                          <h3 className="font-semibold line-clamp-1">
+                          <h3 className="font-semibold text-sm sm:text-base line-clamp-1">
                             {product.name}
                           </h3>
-                          <p className="text-xs text-white/50 mb-auto">
+                          <p className="text-xs text-white/50 mb-auto truncate">
                             {product.category} • ₹{product.price}
                           </p>
-                          <div className="flex justify-between items-end mt-2">
+                          <div className="flex justify-between items-center gap-2 mt-2">
                             <div className="text-xs">
                               <span className="text-white/60 mr-1">Stock:</span>
                               <span
@@ -1944,10 +2061,10 @@ export const DevPage: React.FC<DevPageProps> = ({
                                 {product.stock}
                               </span>
                             </div>
-                            <div className="flex gap-2">
+                            <div className="flex items-center gap-1.5 sm:gap-2">
                               <button
                                 onClick={() => handleToggleListed(product.id, product.isListed !== false)}
-                                className={`text-xs px-2 py-1 rounded-md transition-colors ${
+                                className={`text-xs px-2.5 py-1 rounded-md transition-colors ${
                                   product.isListed !== false
                                     ? "bg-green-500/20 text-green-400 border border-green-500/30 font-semibold"
                                     : "bg-red-500/20 text-red-400 border border-red-500/30 font-semibold"
@@ -1986,7 +2103,7 @@ export const DevPage: React.FC<DevPageProps> = ({
                           <div className="flex gap-2">
                             <button
                               onClick={() => handleRemoveProduct(product.id)}
-                              className="text-red-400 hover:bg-red-500/20 text-sm bg-red-500/10 px-3 py-1 rounded-lg flex items-center gap-1 transition"
+                              className="text-red-400 hover:bg-red-500/20 text-sm bg-red-500/10 px-3 py-1.5 sm:py-1 rounded-lg flex items-center gap-1 transition"
                             >
                               <Trash2 size={14} /> Remove
                             </button>
@@ -1994,7 +2111,7 @@ export const DevPage: React.FC<DevPageProps> = ({
                               onClick={() =>
                                 handleSaveSingleProduct(product.id)
                               }
-                              className="text-white/50 hover:text-white text-sm bg-white/5 px-3 py-1 rounded-lg"
+                              className="text-white/70 hover:text-white text-sm bg-white/10 px-3 py-1.5 sm:py-1 rounded-lg"
                             >
                               Done
                             </button>
@@ -2017,7 +2134,7 @@ export const DevPage: React.FC<DevPageProps> = ({
                             className="glass-input w-full p-2.5 rounded-xl text-sm"
                           />
                         </div>
-                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 items-end">
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 sm:gap-3 items-end">
                           <div>
                             <label className="text-[10px] uppercase tracking-wider text-white/50 ml-1 mb-1 block">
                               Price (₹)
@@ -2381,11 +2498,11 @@ export const DevPage: React.FC<DevPageProps> = ({
               animate={{ opacity: 1, y: 0 }}
               className="space-y-6"
             >
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
-                <h2 className="text-2xl flex items-center font-semibold shrink-0">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4 mb-5 sm:mb-6">
+                <h2 className="text-xl sm:text-2xl flex items-center font-semibold shrink-0">
                    Analytics
                 </h2>
-                <div className="flex flex-wrap gap-2 bg-black/20 p-1.5 rounded-xl self-start sm:self-auto max-w-full items-center">
+                <div className="flex flex-wrap gap-1.5 sm:gap-2 bg-black/20 p-1.5 rounded-xl self-start sm:self-auto max-w-full items-center">
                     {[
                       { value: "all", label: "All Time" },
                       { value: "1", label: "24h" },
@@ -2395,12 +2512,12 @@ export const DevPage: React.FC<DevPageProps> = ({
                       <button
                         key={t.value}
                         onClick={() => setAnalyticsTimeline(t.value)}
-                        className={`px-3 py-1.5 text-sm font-medium rounded-lg transition-colors whitespace-nowrap ${analyticsTimeline === t.value ? "bg-white/10 text-white" : "text-white/40 hover:text-white/80"}`}
+                        className={`px-2.5 sm:px-3 py-1.5 text-xs sm:text-sm font-medium rounded-lg transition-colors whitespace-nowrap ${analyticsTimeline === t.value ? "bg-white/10 text-white" : "text-white/40 hover:text-white/80"}`}
                       >
                         {t.label}
                       </button>
                     ))}
-                    <div className="flex items-center gap-1 ml-2">
+                    <div className="flex items-center gap-1 ml-0 sm:ml-2">
                        <input 
                          type="number" 
                          value={analyticsTimeline !== "all" && !["1", "7", "30"].includes(analyticsTimeline) ? analyticsTimeline : ""} 
@@ -2410,10 +2527,10 @@ export const DevPage: React.FC<DevPageProps> = ({
                            else setAnalyticsTimeline("all");
                          }}
                          placeholder="Custom"
-                         className="w-20 glass-input px-2 py-1.5 rounded-lg text-sm bg-white/5 border-white/10 focus:border-white/30 outline-none text-white text-center"
+                         className="w-16 sm:w-20 glass-input px-2 py-1.5 rounded-lg text-xs sm:text-sm bg-white/5 border-white/10 focus:border-white/30 outline-none text-white text-center"
                          min="1"
                        />
-                       <span className="text-white/40 text-sm">Days</span>
+                       <span className="text-white/40 text-xs sm:text-sm">Days</span>
                     </div>
                 </div>
               </div>
@@ -2539,41 +2656,41 @@ export const DevPage: React.FC<DevPageProps> = ({
                     )}
 
                     {analyticsView === "overview" && (
-                      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 lg:gap-6">
+                      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 lg:gap-6">
                         <button
                           onClick={() => setAnalyticsView("revenue")}
-                          className="glass-panel p-6 rounded-3xl border border-white/10 text-left hover:bg-white/5 transition-colors"
+                          className="glass-panel p-4 sm:p-6 rounded-2xl sm:rounded-3xl border border-white/10 text-left hover:bg-white/5 transition-colors"
                         >
-                          <div className="text-white/50 text-xs sm:text-sm mb-1 uppercase tracking-wider">Total Revenue</div>
-                          <div className="text-xl sm:text-3xl font-bold text-pink-400">₹{totalRevenue.toFixed(2)}</div>
+                          <div className="text-white/50 text-[11px] sm:text-sm mb-1 uppercase tracking-wider">Total Revenue</div>
+                          <div className="text-lg sm:text-3xl font-bold text-pink-400">₹{totalRevenue.toFixed(2)}</div>
                         </button>
                         <button
                           onClick={() => setAnalyticsView("profit")}
-                          className="glass-panel p-6 rounded-3xl border border-white/10 text-left hover:bg-white/5 transition-colors"
+                          className="glass-panel p-4 sm:p-6 rounded-2xl sm:rounded-3xl border border-white/10 text-left hover:bg-white/5 transition-colors"
                         >
-                          <div className="text-white/50 text-xs sm:text-sm mb-1 uppercase tracking-wider">Lifetime Profit</div>
-                          <div className="text-xl sm:text-3xl font-bold text-emerald-400">₹{totalProfit.toFixed(2)}</div>
+                          <div className="text-white/50 text-[11px] sm:text-sm mb-1 uppercase tracking-wider">Lifetime Profit</div>
+                          <div className="text-lg sm:text-3xl font-bold text-emerald-400">₹{totalProfit.toFixed(2)}</div>
                         </button>
                         <button
                           onClick={() => setAnalyticsView("items")}
-                          className="glass-panel p-6 rounded-3xl border border-white/10 text-left hover:bg-white/5 transition-colors"
+                          className="glass-panel p-4 sm:p-6 rounded-2xl sm:rounded-3xl border border-white/10 text-left hover:bg-white/5 transition-colors"
                         >
-                          <div className="text-white/50 text-xs sm:text-sm mb-1 uppercase tracking-wider">Items Sold</div>
-                          <div className="text-xl sm:text-3xl font-bold text-indigo-400">{totalItemsSold}</div>
+                          <div className="text-white/50 text-[11px] sm:text-sm mb-1 uppercase tracking-wider">Items Sold</div>
+                          <div className="text-lg sm:text-3xl font-bold text-indigo-400">{totalItemsSold}</div>
                         </button>
                         <button
                           onClick={() => setAnalyticsView("users")}
-                          className="glass-panel p-6 rounded-3xl border border-white/10 text-left hover:bg-white/5 transition-colors"
+                          className="glass-panel p-4 sm:p-6 rounded-2xl sm:rounded-3xl border border-white/10 text-left hover:bg-white/5 transition-colors"
                         >
-                          <div className="text-white/50 text-xs sm:text-sm mb-1 uppercase tracking-wider">Total Users</div>
-                          <div className="text-xl sm:text-3xl font-bold text-amber-400">{allCustomersData.length}</div>
+                          <div className="text-white/50 text-[11px] sm:text-sm mb-1 uppercase tracking-wider">Total Users</div>
+                          <div className="text-lg sm:text-3xl font-bold text-amber-400">{allCustomersData.length}</div>
                         </button>
                         <button
                           onClick={() => setAnalyticsView("low_stock")}
-                          className="glass-panel p-6 rounded-3xl border border-white/10 text-left hover:bg-amber-500/10 transition-colors"
+                          className="glass-panel p-4 sm:p-6 rounded-2xl sm:rounded-3xl border border-white/10 text-left hover:bg-amber-500/10 transition-colors col-span-2 lg:col-span-1"
                         >
-                          <div className="text-white/50 text-xs sm:text-sm mb-1 uppercase tracking-wider">Low Stock Alerts</div>
-                          <div className="text-xl sm:text-3xl font-bold text-red-400">{localProducts.filter(p => {
+                          <div className="text-white/50 text-[11px] sm:text-sm mb-1 uppercase tracking-wider">Low Stock Alerts</div>
+                          <div className="text-lg sm:text-3xl font-bold text-red-400">{localProducts.filter(p => {
                             return p.stock <= (lowStockThresholds[p.id] !== undefined ? lowStockThresholds[p.id] : 5);
                           }).length}</div>
                         </button>
@@ -2839,14 +2956,14 @@ export const DevPage: React.FC<DevPageProps> = ({
               animate={{ opacity: 1, y: 0 }}
               className="flex justify-center"
             >
-              <div className="glass-panel w-full p-6 sm:p-8 rounded-[2rem] max-w-2xl border border-white/20">
-                <h2 className="text-2xl font-semibold mb-6">
+              <div className="glass-panel w-full p-5 sm:p-8 rounded-2xl sm:rounded-[2rem] max-w-2xl border border-white/20">
+                <h2 className="text-xl sm:text-2xl font-semibold mb-5 sm:mb-6">
                   Site Configuration
                 </h2>
 
-                <div className="mb-10 p-5 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-between">
+                <div className="mb-8 sm:mb-10 p-4 sm:p-5 rounded-2xl bg-white/5 border border-white/10 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                   <div>
-                    <h3 className="text-lg font-semibold flex items-center gap-2 mb-1">
+                    <h3 className="text-base sm:text-lg font-semibold flex items-center gap-2 mb-1">
                       <Power
                         size={20}
                         className={
@@ -2868,7 +2985,7 @@ export const DevPage: React.FC<DevPageProps> = ({
                       logAction("toggle_site_status", { newStatus });
                       setSiteStatus(newStatus);
                     }}
-                    className={`px-6 py-2.5 rounded-xl font-bold transition-all shadow-lg ${siteStatus === "live" ? "bg-red-500 hover:bg-red-400 text-white" : "bg-green-500 hover:bg-green-400 text-black"}`}
+                    className={`w-full sm:w-auto px-6 py-2.5 rounded-xl font-bold transition-all shadow-lg shrink-0 ${siteStatus === "live" ? "bg-red-500 hover:bg-red-400 text-white" : "bg-green-500 hover:bg-green-400 text-black"}`}
                   >
                     {siteStatus === "live" ? "Go Offline" : "Go Live"}
                   </button>
@@ -2876,7 +2993,7 @@ export const DevPage: React.FC<DevPageProps> = ({
 
                 {(!currentUser || currentUser.username.toLowerCase() === "totyil") && (
                   <>
-                    <h2 className="text-2xl font-semibold mb-6">
+                    <h2 className="text-xl sm:text-2xl font-semibold mb-5 sm:mb-6">
                       Payment Configuration
                     </h2>
                     <div className="mb-6">

@@ -53,36 +53,36 @@ export const EditOrderModal: React.FC<EditOrderModalProps> = ({ order, products,
         initial={{ opacity: 0, scale: 0.95 }}
         animate={{ opacity: 1, scale: 1 }}
         exit={{ opacity: 0, scale: 0.95 }}
-        className="bg-zinc-900 border border-white/10 p-6 rounded-3xl w-full max-w-md max-h-[90vh] flex flex-col shadow-2xl relative"
+        className="bg-zinc-900 border border-white/10 p-4 sm:p-6 rounded-2xl sm:rounded-3xl w-full max-w-md max-h-[90vh] flex flex-col shadow-2xl relative"
       >
-        <button onClick={onClose} className="absolute top-4 right-4 p-2 bg-white/5 hover:bg-white/10 rounded-full transition-colors">
+        <button onClick={onClose} className="absolute top-3.5 right-3.5 sm:top-4 sm:right-4 p-2 bg-white/5 hover:bg-white/10 rounded-full transition-colors">
           <X size={18} />
         </button>
-        <h2 className="text-xl font-bold mb-4">Edit Order #{order.id.slice(-4).toUpperCase()}</h2>
+        <h2 className="text-lg sm:text-xl font-bold mb-4 pr-8">Edit Order #{order.id.slice(-4).toUpperCase()}</h2>
         
-        <div className="flex-1 overflow-y-auto pr-2 space-y-4">
+        <div className="flex-1 overflow-y-auto pr-1 sm:pr-2 space-y-4">
           <div className="space-y-2">
             <h3 className="text-sm font-semibold text-white/50 uppercase tracking-wider">Current Items</h3>
             {items.length === 0 ? (
                <div className="text-center text-white/40 py-4">No items left</div>
             ) : (
               items.map(item => (
-                <div key={item.id} className="flex justify-between items-center bg-white/5 p-3 rounded-xl border border-white/5">
-                  <div className="min-w-0 flex-1 pr-3">
+                <div key={item.id} className="flex justify-between items-center bg-white/5 p-3 rounded-xl border border-white/5 gap-2">
+                  <div className="min-w-0 flex-1 pr-2">
                     <div className="font-medium text-sm truncate">{item.name}</div>
                     <div className="text-xs text-white/50">₹{Number(item.price).toFixed(2)} / ea</div>
                   </div>
-                  <div className="flex items-center gap-2 bg-black/40 rounded-lg p-1 shrink-0 border border-white/5">
+                  <div className="flex items-center gap-1.5 sm:gap-2 bg-black/40 rounded-lg p-1 shrink-0 border border-white/5">
                     <button
                       onClick={() => updateQuantity(item.id, -1)}
-                      className="p-1 hover:bg-white/10 rounded-md transition-colors"
+                      className="p-1.5 sm:p-1 hover:bg-white/10 rounded-md transition-colors"
                     >
                       <Minus size={14} />
                     </button>
                     <span className="text-sm font-bold w-6 text-center">{item.quantity}</span>
                     <button
                       onClick={() => updateQuantity(item.id, 1)}
-                      className="p-1 hover:bg-white/10 rounded-md transition-colors"
+                      className="p-1.5 sm:p-1 hover:bg-white/10 rounded-md transition-colors"
                     >
                       <Plus size={14} />
                     </button>

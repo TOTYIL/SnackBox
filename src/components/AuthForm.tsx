@@ -93,20 +93,20 @@ export function AuthForm({ onAuthComplete }: AuthProps) {
         transition={{ duration: 0.3, ease: [0.2, 0.8, 0.2, 1] }}
         className="w-full max-w-md"
       >
-        <div className="glass-panel border-white/20 rounded-3xl p-8 sm:p-10 relative overflow-hidden shadow-2xl shadow-indigo-500/10">
+        <div className="glass-panel border-white/20 rounded-3xl p-6 sm:p-10 relative overflow-hidden shadow-2xl shadow-indigo-500/10">
           
           <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-pink-500 via-purple-500 to-indigo-500" />
 
-          <div className="text-center mb-8">
+          <div className="text-center mb-6 sm:mb-8">
             <div className="flex justify-center mb-4">
-              <div className="bg-white/10 p-4 rounded-2xl border border-white/10 text-pink-400">
-                <Package size={32} />
+              <div className="bg-white/10 p-3.5 sm:p-4 rounded-2xl border border-white/10 text-pink-400">
+                <Package size={28} className="sm:w-8 sm:h-8" />
               </div>
             </div>
-            <h2 className="text-3xl font-bold text-white tracking-tight">
+            <h2 className="text-2xl sm:text-3xl font-bold text-white tracking-tight">
               {isLogin ? 'Welcome back' : 'Create an account'}
             </h2>
-            <p className="text-white/60 mt-2">
+            <p className="text-white/60 text-sm sm:text-base mt-2">
               {isLogin ? 'Enter your details to continue' : 'Join SnackBox to order your favorites'}
             </p>
           </div>

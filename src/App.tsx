@@ -197,13 +197,17 @@ export default function App() {
           // Try to read from payment_method column if it exists!
           if (o.payment_method) {
             paymentMethod = o.payment_method;
-          } else if (typeof o.room === "string" && o.room.includes("||")) {
+          }
+          if (typeof o.room === "string" && o.room.includes("||")) {
             const parts = o.room.split("||");
             actualRoom = parts[0];
-            paymentMethod = parts[1] as "cod" | "prepaid";
-            if (parts.length > 2 && parts[2].startsWith("P:")) {
-              pointsUsed = Number(parts[2].substring(2));
-            }
+            parts.slice(1).forEach((part: string) => {
+              if (!paymentMethod && (part === "cod" || part === "prepaid")) {
+                paymentMethod = part;
+              } else if (part.startsWith("P:")) {
+                pointsUsed = Number(part.substring(2));
+              }
+            });
           }
 
           // Default to cod if missing
@@ -236,6 +240,7 @@ export default function App() {
           const subtotal = items.reduce((acc, item: any) => acc + item.price * item.quantity, 0);
           const prepaidDiscount = 0;
           const cravePointsDisabled = o.crave_points_disabled === true || (typeof o.room === "string" && o.room.includes("||C:NO"));
+          const paymentVerified = o.payment_verified === true || (typeof o.room === "string" && o.room.includes("||V:OK"));
 
           let serviceCharge = 0;
           if (typeof actualRoom === "string" && actualRoom.includes(" - ") && !actualRoom.startsWith("Gaumukh")) {
@@ -255,6 +260,7 @@ export default function App() {
             prepaidDiscount,
             serviceCharge,
             cravePointsDisabled,
+            paymentVerified,
             date: o.date,
             total: calculatedTotal,
             status: statusToUse,
@@ -819,6 +825,7 @@ export default function App() {
       phone: customerData.phone,
       room: customerData.room,
       paymentMethod: customerData.paymentMethod,
+      paymentVerified: false,
       items: cartItems.map((item) => ({
         id: item.id,
         name: item.name,
@@ -1086,10 +1093,10 @@ export default function App() {
       </AnimatePresence>
       <div className="mesh-bg" />
 
-      <div className="min-h-screen flex flex-col pt-24 pb-12 px-4 sm:px-6 lg:px-12 w-full max-w-[1800px] mx-auto">
+      <div className="min-h-screen flex flex-col pt-20 sm:pt-24 pb-10 sm:pb-12 px-3 sm:px-6 lg:px-12 w-full max-w-[1800px] mx-auto">
         {/* Navigation Ribbon - Stretched and info dense */}
-        <nav className="fixed top-0 left-0 w-full z-40 px-3 sm:px-6 lg:px-8 py-3 sm:py-4">
-          <div className="w-full max-w-[1800px] mx-auto glass-panel border border-white/20 rounded-full px-4 sm:px-6 py-2.5 sm:py-3 flex items-center justify-between gap-2 sm:gap-4 relative">
+        <nav className="fixed top-0 left-0 w-full z-40 px-3 sm:px-6 lg:px-8 py-2.5 sm:py-4">
+          <div className="w-full max-w-[1800px] mx-auto glass-panel border border-white/20 rounded-full px-3.5 sm:px-6 py-2 sm:py-3 flex items-center justify-between gap-2 sm:gap-4 relative">
             {/* Logo shifted left */}
             <button
               onClick={() => setIsTrackerOpen(true)}
@@ -1103,10 +1110,10 @@ export default function App() {
               </span>
             </button>
 
-            <div className="flex items-center gap-2 flex-1 justify-end">
+            <div className="flex items-center gap-1.5 sm:gap-2 flex-1 justify-end">
               {/* Search within Navigation Ribbon */}
               <div
-                className={`relative group transition-all duration-300 ease-in-out ${isSearchExpanded ? "w-full max-w-2xl" : "w-10 sm:w-12 mx-2"}`}
+                className={`relative group transition-all duration-300 ease-in-out ${isSearchExpanded ? "w-full max-w-2xl" : "w-10 sm:w-12 mx-0 sm:mx-2"}`}
               >
                 {isSearchExpanded ? (
                   <>
@@ -1244,8 +1251,8 @@ export default function App() {
         ) : (
           <>
             {/* Hero Section */}
-            <header className="mb-8 mt-6 sm:mt-12 text-center md:text-left">
-              <h1 className="text-4xl sm:text-5xl md:text-6xl xl:text-7xl font-bold mb-4 sm:mb-6 leading-tight">
+            <header className="mb-5 sm:mb-8 mt-2 sm:mt-12 text-center md:text-left">
+              <h1 className="text-3xl sm:text-5xl md:text-6xl xl:text-7xl font-bold mb-2 sm:mb-6 leading-tight">
                 Crave it. <br className="hidden md:block" />
                 <span className="text-transparent bg-clip-text bg-gradient-to-r from-pink-400 via-purple-400 to-indigo-400">
                   Click it. Crunch it.
@@ -1254,15 +1261,15 @@ export default function App() {
             </header>
 
             {/* Categories */}
-            <div className="mb-8 space-y-3">
+            <div className="mb-5 sm:mb-8 space-y-2.5 sm:space-y-3">
               {/* Main Categories */}
-              <div className="flex overflow-x-auto pb-1 -mx-4 px-4 sm:mx-0 sm:px-0 gap-2.5 sm:gap-3 no-scrollbar [&::-webkit-scrollbar]:hidden">
+              <div className="flex overflow-x-auto pb-1 -mx-3 px-3 sm:mx-0 sm:px-0 gap-2 sm:gap-3 no-scrollbar [&::-webkit-scrollbar]:hidden">
                 <button
                   onClick={() => {
                     setActiveMainCategory("All");
                     setActiveSubCategory(null);
                   }}
-                  className={`whitespace-nowrap px-5 sm:px-6 py-2 sm:py-2.5 rounded-full border transition-all duration-300 text-sm sm:text-base font-semibold ${
+                  className={`whitespace-nowrap px-4 sm:px-6 py-1.5 sm:py-2.5 rounded-full border transition-all duration-300 text-xs sm:text-base font-semibold ${
                     activeMainCategory === "All"
                       ? "bg-white text-black border-white shadow-[0_0_20px_rgba(255,255,255,0.2)]"
                       : "glass-panel border-white/20 hover:bg-white/10 text-white/80"
@@ -1277,7 +1284,7 @@ export default function App() {
                       setActiveMainCategory(mc.id);
                       setActiveSubCategory(null);
                     }}
-                    className={`whitespace-nowrap px-5 sm:px-6 py-2 sm:py-2.5 rounded-full border transition-all duration-300 text-sm sm:text-base font-semibold ${
+                    className={`whitespace-nowrap px-4 sm:px-6 py-1.5 sm:py-2.5 rounded-full border transition-all duration-300 text-xs sm:text-base font-semibold ${
                       activeMainCategory === mc.id
                         ? "bg-white text-black border-white shadow-[0_0_20px_rgba(255,255,255,0.2)]"
                         : "glass-panel border-white/20 hover:bg-white/10 text-white/80"
@@ -1290,7 +1297,7 @@ export default function App() {
 
               {/* Sub-Categories lying under Main Category */}
               {visibleSubCategories.length > 0 && (
-                <div className="flex items-center overflow-x-auto pb-2 -mx-4 px-4 sm:mx-0 sm:px-0 gap-2 no-scrollbar [&::-webkit-scrollbar]:hidden sm:pl-3 sm:border-l-2 sm:border-pink-400/30">
+                <div className="flex items-center overflow-x-auto pb-1.5 -mx-3 px-3 sm:mx-0 sm:px-0 gap-1.5 sm:gap-2 no-scrollbar [&::-webkit-scrollbar]:hidden sm:pl-3 sm:border-l-2 sm:border-pink-400/30">
                   {visibleSubCategories.map((sub) => {
                     const isSelected =
                       activeSubCategory !== null &&
@@ -1301,7 +1308,7 @@ export default function App() {
                         onClick={() =>
                           setActiveSubCategory(isSelected ? null : sub)
                         }
-                        className={`whitespace-nowrap px-4 py-1.5 rounded-full border transition-all duration-300 text-xs sm:text-sm ${
+                        className={`whitespace-nowrap px-3.5 sm:px-4 py-1.5 rounded-full border transition-all duration-300 text-xs sm:text-sm ${
                           isSelected
                             ? "bg-white/20 text-white border-white font-medium"
                             : "glass-panel border-white/15 hover:bg-white/10 font-medium text-white/70"
@@ -1347,14 +1354,14 @@ export default function App() {
 
       {/* Footer */}
       <footer className="w-full mt-auto">
-        <div className="glass-panel border-x-0 border-b-0 border-t border-white/10 py-1.5 px-2">
-          <div className="max-w-7xl mx-auto flex flex-row items-center justify-center gap-2 sm:gap-4 text-[10px] sm:text-xs text-white/50">
+        <div className="glass-panel border-x-0 border-b-0 border-t border-white/10 py-2.5 px-3">
+          <div className="max-w-7xl mx-auto flex flex-wrap items-center justify-center gap-x-3 gap-y-1.5 sm:gap-4 text-[11px] sm:text-xs text-white/50">
             <div className="flex items-center gap-1 font-bold text-white/80 tracking-tight">
               <Package className="text-pink-400" size={12} />
               <span className="hidden sm:inline">SnackBox</span>
             </div>
             <div className="w-1 h-1 rounded-full bg-white/20" />
-            <div className="flex justify-center gap-2 sm:gap-4">
+            <div className="flex flex-wrap justify-center gap-x-3 gap-y-1 sm:gap-4">
               <button
                 onClick={() => setActivePage("care")}
                 className="hover:text-white transition"
@@ -1379,7 +1386,7 @@ export default function App() {
               &copy; {new Date().getFullYear()} SnackBox Inc.
             </div>
             <div className="w-1 h-1 rounded-full bg-white/20" />
-            <div className="text-white/40">v1.3.06</div>
+            <div className="text-white/40">v1.3.07</div>
           </div>
         </div>
       </footer>
@@ -1403,6 +1410,7 @@ export default function App() {
         cartTotalItems={cartTotalItems}
         upiId={upiId}
         cravePoints={cravePoints}
+        orders={orders}
         onComplete={finishCheckout}
       />
 

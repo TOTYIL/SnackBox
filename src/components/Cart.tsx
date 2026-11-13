@@ -36,16 +36,16 @@ export const Cart: React.FC<CartProps> = ({ isOpen, onClose, items, updateQuanti
             transition={{ type: "spring", damping: 25, stiffness: 200 }}
             className="fixed top-0 right-0 w-full md:w-96 h-full glass-panel border-r-0 z-50 flex flex-col"
           >
-            <div className="p-6 border-b border-white/10 flex items-center justify-between">
-              <h2 className="text-2xl font-medium flex items-center gap-2">
-                <ShoppingBag /> Your Box
+            <div className="p-4 sm:p-6 border-b border-white/10 flex items-center justify-between">
+              <h2 className="text-xl sm:text-2xl font-medium flex items-center gap-2">
+                <ShoppingBag size={22} /> Your Box
               </h2>
               <button onClick={onClose} className="p-2 rounded-full glass-button hover:bg-white/20">
                 <X size={20} />
               </button>
             </div>
 
-            <div className="flex-1 overflow-y-auto p-6 flex flex-col gap-4">
+            <div className="flex-1 overflow-y-auto p-4 sm:p-6 flex flex-col gap-3 sm:gap-4">
               {items.length === 0 ? (
                 <div className="text-center text-white/50 mt-10">
                   <ShoppingBag size={48} className="mx-auto mb-4 opacity-20" />
@@ -56,23 +56,23 @@ export const Cart: React.FC<CartProps> = ({ isOpen, onClose, items, updateQuanti
                   <motion.div 
                     layout
                     key={item.id} 
-                    className="flex gap-4 items-center bg-white/5 p-3 rounded-2xl border border-white/10"
+                    className="flex gap-3 sm:gap-4 items-center bg-white/5 p-2.5 sm:p-3 rounded-2xl border border-white/10"
                   >
                     <div 
-                      className="w-16 h-16 rounded-xl shrink-0 bg-cover bg-center" 
+                      className="w-14 h-14 sm:w-16 sm:h-16 rounded-xl shrink-0 bg-cover bg-center" 
                       style={{ backgroundImage: `url(${item.image})` }}
                       title={item.name}
                     />
-                    <div className="flex-1">
-                      <h4 className="font-medium line-clamp-1">{item.name}</h4>
-                      <div className="text-sm text-white/60">₹{item.price.toFixed(2)}</div>
+                    <div className="flex-1 min-w-0">
+                      <h4 className="font-medium text-sm sm:text-base line-clamp-1">{item.name}</h4>
+                      <div className="text-xs sm:text-sm text-white/60">₹{item.price.toFixed(2)}</div>
                     </div>
-                    <div className="flex items-center gap-3 glass-pill px-2 py-1">
-                      <button onClick={() => updateQuantity(item.id, -1)} className="p-1 hover:text-pink-400 transition-colors">
+                    <div className="flex items-center gap-2 sm:gap-3 glass-pill px-2 py-1 shrink-0">
+                      <button onClick={() => updateQuantity(item.id, -1)} className="p-1.5 sm:p-1 hover:text-pink-400 transition-colors">
                         <Minus size={14} />
                       </button>
-                      <span className="w-4 text-center font-medium">{item.quantity}</span>
-                      <button onClick={() => updateQuantity(item.id, 1)} disabled={item.quantity >= item.stock} className="p-1 hover:text-green-400 transition-colors disabled:opacity-50 disabled:hover:text-white disabled:cursor-not-allowed">
+                      <span className="w-4 text-center text-sm sm:text-base font-medium">{item.quantity}</span>
+                      <button onClick={() => updateQuantity(item.id, 1)} disabled={item.quantity >= item.stock} className="p-1.5 sm:p-1 hover:text-green-400 transition-colors disabled:opacity-50 disabled:hover:text-white disabled:cursor-not-allowed">
                         <Plus size={14} />
                       </button>
                     </div>
@@ -81,15 +81,15 @@ export const Cart: React.FC<CartProps> = ({ isOpen, onClose, items, updateQuanti
               )}
             </div>
 
-            <div className="p-6 border-t border-white/10 bg-black/20">
-              <div className="flex justify-between items-center mb-6">
-                <span className="text-lg text-white/70">Total</span>
-                <span className="text-3xl font-semibold">₹{total.toFixed(2)}</span>
+            <div className="p-4 sm:p-6 border-t border-white/10 bg-black/20">
+              <div className="flex justify-between items-center mb-4 sm:mb-6">
+                <span className="text-base sm:text-lg text-white/70">Total</span>
+                <span className="text-2xl sm:text-3xl font-semibold">₹{total.toFixed(2)}</span>
               </div>
               <button 
                 onClick={onCheckout}
                 disabled={items.length === 0}
-                className="w-full py-4 rounded-full bg-white text-black font-semibold text-lg hover:bg-gray-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                className="w-full py-3.5 sm:py-4 rounded-full bg-white text-black font-semibold text-base sm:text-lg hover:bg-gray-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 Checkout Now
               </button>
