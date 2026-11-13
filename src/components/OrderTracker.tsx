@@ -411,8 +411,8 @@ export const OrderTracker: React.FC<OrderTrackerProps> = ({
                                 </h4>
                               </div>
                               <p className="text-xs font-medium text-white/50 max-w-[200px] leading-relaxed">
-                                Earn 0.01 Crave Candies per ₹1 spent on
-                                successful deliveries.
+                                Earn 0.01 Crave Candies per ₹1 spent on prepaid
+                                orders.
                               </p>
                             </div>
                             <div className="bg-yellow-400/10 text-yellow-400 text-[10px] font-black uppercase tracking-wider px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-full border border-yellow-400/20 backdrop-blur-md shrink-0">

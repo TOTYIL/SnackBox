@@ -752,9 +752,14 @@ export default function App() {
         used += pointsUsedInOrder;
       }
 
-      // Do not earn any crave candies at the order they used a discount at
-      // Also respect the disabled toggle from DevPage
-      if (o.status === "completed" && !o.cravePointsDisabled && pointsUsedInOrder === 0) {
+      // Only earn Crave Candies on completed prepaid orders (no Crave Candies for COD/Pay at Pickup),
+      // when no discount points were redeemed, and when not disabled in DevPage
+      if (
+        o.status === "completed" &&
+        o.paymentMethod === "prepaid" &&
+        !o.cravePointsDisabled &&
+        pointsUsedInOrder === 0
+      ) {
         // Earn .01 per 1 spent (excluding service charge). 
         // Amount spent without service charge is (items subtotal - discounts)
         const subtotal = (o.items || []).reduce((acc, i) => acc + i.price * i.quantity, 0);
@@ -1386,7 +1391,7 @@ export default function App() {
               &copy; {new Date().getFullYear()} SnackBox Inc.
             </div>
             <div className="w-1 h-1 rounded-full bg-white/20" />
-            <div className="text-white/40">v1.3.07</div>
+            <div className="text-white/40">v1.3.08</div>
           </div>
         </div>
       </footer>

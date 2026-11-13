@@ -1376,7 +1376,7 @@ export const DevPage: React.FC<DevPageProps> = ({
                               {order.paymentMethod === "prepaid"
                                 ? "Prepaid (UPI)"
                                 : order.paymentMethod === "cod"
-                                  ? "Cash on Delivery (COD)"
+                                  ? "Pay at Pickup (COD)"
                                   : "Not Specified"}
                             </p>
                           </div>
@@ -1421,16 +1421,22 @@ export const DevPage: React.FC<DevPageProps> = ({
                           </div>
                           <div>
                             <p className="text-xs text-white/50 mb-1">Crave Candies Action</p>
-                            <button
-                              onClick={() => handleToggleCraveCandies(order.id, order.dbRoom || order.room)}
-                              className={`px-3 py-1 mt-0.5 rounded-full text-[10px] sm:text-xs font-bold transition-all ${
-                                !order.cravePointsDisabled
-                                  ? "bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30 border border-emerald-500/30"
-                                  : "bg-red-500/20 text-red-300 hover:bg-red-500/30 border border-red-500/30"
-                              }`}
-                            >
-                              {!order.cravePointsDisabled ? "ON (Allow)" : "OFF (Disabled)"}
-                            </button>
+                            {order.paymentMethod === "prepaid" ? (
+                              <button
+                                onClick={() => handleToggleCraveCandies(order.id, order.dbRoom || order.room)}
+                                className={`px-3 py-1 mt-0.5 rounded-full text-[10px] sm:text-xs font-bold transition-all ${
+                                  !order.cravePointsDisabled
+                                    ? "bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30 border border-emerald-500/30"
+                                    : "bg-red-500/20 text-red-300 hover:bg-red-500/30 border border-red-500/30"
+                                }`}
+                              >
+                                {!order.cravePointsDisabled ? "ON (Allow)" : "OFF (Disabled)"}
+                              </button>
+                            ) : (
+                              <span className="inline-block px-3 py-1 mt-0.5 rounded-full text-[10px] sm:text-xs font-bold bg-white/5 text-white/40 border border-white/10">
+                                None (Pay at Pickup)
+                              </span>
+                            )}
                           </div>
                         </div>
 
@@ -1809,7 +1815,7 @@ export const DevPage: React.FC<DevPageProps> = ({
                                                   ? "Prepaid (UPI)"
                                                   : order.paymentMethod ===
                                                       "cod"
-                                                    ? "Cash on Delivery (COD)"
+                                                    ? "Pay at Pickup (COD)"
                                                     : "Not Specified"}
                                               </p>
                                             </div>
@@ -1854,16 +1860,22 @@ export const DevPage: React.FC<DevPageProps> = ({
                                             </div>
                                             <div>
                                               <p className="text-xs text-white/50 mb-1">Crave Candies Action</p>
-                                              <button
-                                                onClick={() => handleToggleCraveCandies(order.id, order.dbRoom || order.room)}
-                                                className={`px-3 py-1 mt-0.5 rounded-full text-[10px] sm:text-xs font-bold transition-all ${
-                                                  !order.cravePointsDisabled
-                                                    ? "bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30 border border-emerald-500/30"
-                                                    : "bg-red-500/20 text-red-300 hover:bg-red-500/30 border border-red-500/30"
-                                                }`}
-                                              >
-                                                {!order.cravePointsDisabled ? "ON (Allow)" : "OFF (Disabled)"}
-                                              </button>
+                                              {order.paymentMethod === "prepaid" ? (
+                                                <button
+                                                  onClick={() => handleToggleCraveCandies(order.id, order.dbRoom || order.room)}
+                                                  className={`px-3 py-1 mt-0.5 rounded-full text-[10px] sm:text-xs font-bold transition-all ${
+                                                    !order.cravePointsDisabled
+                                                      ? "bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30 border border-emerald-500/30"
+                                                      : "bg-red-500/20 text-red-300 hover:bg-red-500/30 border border-red-500/30"
+                                                  }`}
+                                                >
+                                                  {!order.cravePointsDisabled ? "ON (Allow)" : "OFF (Disabled)"}
+                                                </button>
+                                              ) : (
+                                                <span className="inline-block px-3 py-1 mt-0.5 rounded-full text-[10px] sm:text-xs font-bold bg-white/5 text-white/40 border border-white/10">
+                                                  None (Pay at Pickup)
+                                                </span>
+                                              )}
                                             </div>
                                           </div>
 

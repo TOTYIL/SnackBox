@@ -602,7 +602,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
                   <div className="bg-red-500/10 border border-red-500/30 rounded-2xl p-3.5 sm:p-4 mb-3 flex items-start gap-3 text-left">
                     <AlertCircle size={20} className="text-red-400 shrink-0 mt-0.5" />
                     <div className="text-sm text-red-200">
-                      UPI ID is not configured in Payment Config. Please set a UPI ID in the Dev Page or pay with COD below.
+                      UPI ID is not configured in Payment Config. Please set a UPI ID in the Dev Page or pay at pickup below.
                     </div>
                   </div>
                 )}
@@ -613,17 +613,21 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
                       href={upiLink}
                       target="_top"
                       onClick={handleStartUpiVerification}
-                      className="w-full h-full min-h-[80px] sm:min-h-[88px] bg-white/10 hover:bg-white/20 border border-white/10 rounded-2xl p-3.5 sm:p-4 flex items-center justify-start gap-3 sm:gap-4 transition-colors group cursor-pointer"
+                      className="w-full h-full min-h-[88px] bg-white/10 hover:bg-white/20 border border-white/10 rounded-2xl p-3.5 sm:p-4 flex items-center justify-start gap-3 sm:gap-4 transition-colors group cursor-pointer"
                     >
-                      <div className="w-11 h-11 sm:w-12 sm:h-12 rounded-full bg-pink-500/20 text-pink-400 flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform">
+                      <div className="w-11 h-11 sm:w-12 sm:h-12 rounded-full bg-green-500/20 text-green-400 flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform">
                         <Smartphone size={22} className="sm:w-6 sm:h-6" />
                       </div>
                       <div className="text-left flex-1 min-w-0">
                         <h3 className="font-bold text-base sm:text-lg mb-0.5">
                           Pay with UPI App
                         </h3>
-                        <p className="text-xs sm:text-sm text-white/50 truncate">
+                        <p className="text-xs sm:text-sm text-white/50">
                           Pay ₹{formattedAmount} via UPI app
+                        </p>
+                        <p className="text-[11px] sm:text-xs text-green-400 font-semibold mt-1 flex items-center gap-1">
+                          <Award size={12} className="shrink-0" />
+                          Earn Crave Candies
                         </p>
                       </div>
                     </a>
@@ -631,15 +635,20 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
 
                   <button
                     onClick={() => handleFinish("cod")}
-                    className="w-full h-full min-h-[80px] sm:min-h-[88px] bg-white/10 hover:bg-white/20 border border-white/10 rounded-2xl p-3.5 sm:p-4 flex items-center justify-start gap-3 sm:gap-4 transition-colors group"
+                    className="w-full h-full min-h-[88px] bg-white/10 hover:bg-white/20 border border-white/10 rounded-2xl p-3.5 sm:p-4 flex items-center justify-start gap-3 sm:gap-4 transition-colors group"
                   >
-                    <div className="w-11 h-11 sm:w-12 sm:h-12 rounded-full bg-green-500/20 text-green-400 flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform">
+                    <div className="w-11 h-11 sm:w-12 sm:h-12 rounded-full bg-rose-500/20 text-rose-400 flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform">
                       <Banknote size={22} className="sm:w-6 sm:h-6" />
                     </div>
                     <div className="text-left flex-1 min-w-0">
-                      <h3 className="font-bold text-base sm:text-lg mb-0.5">COD</h3>
-                      <p className="text-xs sm:text-sm text-white/50 truncate">
-                        Pay when your snacks arrive
+                      <h3 className="font-bold text-base sm:text-lg mb-0.5">
+                        Pay at Pickup
+                      </h3>
+                      <p className="text-xs sm:text-sm text-white/50">
+                        Pay when you pick up your order
+                      </p>
+                      <p className="text-[11px] sm:text-xs text-red-400 font-semibold mt-1">
+                        No Crave Candies
                       </p>
                     </div>
                   </button>
